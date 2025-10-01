@@ -27,13 +27,17 @@ def get_player_stats(year: int, player_type: str) -> pd.DataFrame:
     df = pd.read_html(url, header=1)[0]
 
     # get players which changed teams during a season
-    players_multiple_teams = df[df['Tm'].isin(['TOT'])]
+    players_multiple_teams = df[df['Team'].isin(['TOT'])]
 
     # filter out players who played on multiple teams
     df = df[~df['Player'].isin(players_multiple_teams['Player'])]
     df = df[df['Player'] != "Player"]
 
     # add the aggregate rows
-    df = df.append(players_multiple_teams, ignore_index=True)
+    df = pd.concat([df, players_multiple_teams], ignore_index=True) 
 
     return df
+
+if __name__ == "__main__":
+    df = get_player_stats(2016, 'goalies')
+    #print(df.head())

@@ -6,7 +6,7 @@ import pandas as pd
 class LNHDataScrapper:
     def __init__(self):
         self.dest_folder = "./ressources/"
-        os.mkdir(self.dest_folder)
+        os.makedirs(self.dest_folder, exist_ok=True)
 
     def get_one_game(self,game_id,save:bool =False):
         response = requests.get(f"https://api-web.nhle.com/v1/gamecenter/{game_id}/play-by-play")
@@ -81,11 +81,13 @@ class LNHDataScrapper:
         df = df[df["typeDescKey"].isin(filterValue) ]
         # df["game_id"]= data[0]["id"]
         # print(df["typeDescKey"].unique())
-        print(df)
+        return df
 
 
 if __name__ == "__main__":
     lnhdata = LNHDataScrapper()
     # lnhdata.get_season_data("2017")
     # lnhdata.open_data("2017")
-    lnhdata.get_dataframe_from_data("20172018")
+    df = lnhdata.get_dataframe_from_data("20242025")
+    print(df.head())
+    
