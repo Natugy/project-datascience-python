@@ -6,7 +6,8 @@ import pandas as pd
 class LNHDataScrapper:
     def __init__(self):
         self.dest_folder = "./ressources/"
-        os.mkdir(self.dest_folder)
+        if os.path.exists(self.dest_folder) ==False:
+            os.mkdir(self.dest_folder)
 
     def get_one_game(self,game_id,save:bool =False):
         response = requests.get(f"https://api-web.nhle.com/v1/gamecenter/{game_id}/play-by-play")
@@ -55,7 +56,7 @@ class LNHDataScrapper:
             print(f"An unexpected error occurred during data downloading: {e}")
     
     def open_data(self,season):
-        filename = f"{season}.json"
+        filename = f"{self.dest_folder}{season}.json"
         if os.path.exists(filename):
             try:
                 with open(filename,'r') as f:
@@ -75,13 +76,21 @@ class LNHDataScrapper:
         data = self.open_data(season)
         df = pd.DataFrame(data[0]["plays"])
         
-        filterValue = ['shot-on-goal','blocked-shot','missed-shot']
+        players = pd.DataFrame(data[0]["rosterSpots"])
+        players["firstName"] = pd.json_normalize(players["firstName"])["default"]
+        players["lastName"] =pd.json_normalize(players["firstName"])["default"]
+        players = players.set_index("playerId")
+        
+        filterValue = ['shot-on-goal','goal'] #'blocked-shot','missed-shot', 
         details = pd.json_normalize(df["details"])
-        df["xCoord"]=details["xCoord"]
+        period = pd.json_normalize(df['periodDescriptor'])
         df = df[df["typeDescKey"].isin(filterValue) ]
+        df["xCoord"]=details["xCoord"]
+        df["yCoord"]=details["yCoord"]
+        df["shooterId"] = details["shootingPlayerId"]
         # df["game_id"]= data[0]["id"]
-        # print(df["typeDescKey"].unique())
-        print(df)
+        # print(df.head(10))
+        return df
 
 
 if __name__ == "__main__":
