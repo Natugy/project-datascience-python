@@ -97,4 +97,6 @@ if __name__ == "__main__":
     lnhdata = LNHDataScrapper()
     # lnhdata.get_season_data("2017")
     # lnhdata.open_data("2017")
-    lnhdata.get_dataframe_from_data("20172018")
+    df = lnhdata.get_dataframe_from_data("20242025")
+    print(df.head())
+    
