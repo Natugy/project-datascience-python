@@ -57,6 +57,7 @@ class LNHDataScrapper:
     
     def open_data(self,season):
         filename = f"{self.dest_folder}{season}.json"
+        data : list = []
         if os.path.exists(filename):
             try:
                 with open(filename,'r') as f:
@@ -72,31 +73,9 @@ class LNHDataScrapper:
             data = self.get_season_data(season)
         return data
 
-    def get_dataframe_from_data(self,season):
-        data = self.open_data(season)
-        df = pd.DataFrame(data[0]["plays"])
-        
-        players = pd.DataFrame(data[0]["rosterSpots"])
-        players["firstName"] = pd.json_normalize(players["firstName"])["default"]
-        players["lastName"] =pd.json_normalize(players["firstName"])["default"]
-        players = players.set_index("playerId")
-        
-        filterValue = ['shot-on-goal','goal'] #'blocked-shot','missed-shot', 
-        details = pd.json_normalize(df["details"])
-        period = pd.json_normalize(df['periodDescriptor'])
-        df = df[df["typeDescKey"].isin(filterValue) ]
-        df["xCoord"]=details["xCoord"]
-        df["yCoord"]=details["yCoord"]
-        df["shooterId"] = details["shootingPlayerId"]
-        # df["game_id"]= data[0]["id"]
-        # print(df.head(10))
-        return df
+    
 
 
 if __name__ == "__main__":
-    lnhdata = LNHDataScrapper()
-    # lnhdata.get_season_data("2017")
-    # lnhdata.open_data("2017")
-    df = lnhdata.get_dataframe_from_data("20242025")
-    print(df.head())
+    pass
     
