@@ -1,5 +1,6 @@
 import pandas as pd
-from data_scrapping import LNHDataScrapper
+from .data_scrapping import LNHDataScrapper
+
 
 def get_playerName_from_game(game_players_data : pd.DataFrame,searchedPlayerId):
     '''Permet de récupérer le nom d'un joueur en donnant l'ID'''
@@ -48,6 +49,7 @@ def get_dataframe_from_goal_event(players,plays):
     return df[['teamId','period','shotType','xCoord','yCoord','shooterId','shooterName','goalieId','goalieName','typeDescKey']]
 
 
+
 def get_dataframe_from_data(season):
         dataScrap = LNHDataScrapper()
         data = dataScrap.open_data(season)
@@ -57,8 +59,7 @@ def get_dataframe_from_data(season):
             shotongoalEvent = get_dataframe_from_shot_on_goal_event(players,game["plays"])
             goalEvent = get_dataframe_from_goal_event(players,game["plays"])
             result = pd.concat([result,shotongoalEvent,goalEvent])
-            
-       
+               
         return result
 
 
