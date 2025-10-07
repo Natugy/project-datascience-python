@@ -1,5 +1,6 @@
 import pandas as pd
-from .data_scrapping import LNHDataScrapper
+import os
+from data_scrapping import LNHDataScrapper
 
 
 def get_playerName_from_game(game_players_data : pd.DataFrame,searchedPlayerId):
@@ -29,7 +30,7 @@ def get_dataframe_from_shot_on_goal_event(players,plays):
     df["shotType"] = details["shotType"]
     df["period"] = period["number"]
     df["teamId"] = details["eventOwnerTeamId"]
-    return df[['teamId','period','shotType','xCoord','yCoord','shooterId','shooterName','goalieId','goalieName','typeDescKey']]
+    return df[['teamId','period','timeInPeriod','shotType','xCoord','yCoord','shooterId','shooterName','goalieId','goalieName','typeDescKey']]
 
 def get_dataframe_from_goal_event(players,plays):
     df = pd.DataFrame(plays)
@@ -46,25 +47,30 @@ def get_dataframe_from_goal_event(players,plays):
     df["shotType"] = details["shotType"]
     df["period"] = period["number"]
     df["teamId"] = details["eventOwnerTeamId"]
-    return df[['teamId','period','shotType','xCoord','yCoord','shooterId','shooterName','goalieId','goalieName','typeDescKey']]
+    return df[['teamId','period','timeInPeriod','shotType','xCoord','yCoord','shooterId','shooterName','goalieId','goalieName','typeDescKey']]
 
 
 
 def get_dataframe_from_data(season):
         dataScrap = LNHDataScrapper()
-        data = dataScrap.open_data(season)
-        result = pd.DataFrame([])
-        for game in data:
-            players = pd.json_normalize(game["rosterSpots"])
-            shotongoalEvent = get_dataframe_from_shot_on_goal_event(players,game["plays"])
-            goalEvent = get_dataframe_from_goal_event(players,game["plays"])
-            result = pd.concat([result,shotongoalEvent,goalEvent])
-               
+        data_csv = f"{dataScrap.dest_folder}/{season}.csv"
+        if os.path.exists(data_csv):
+            result = pd.read_csv(data_csv)
+        else:
+            data = dataScrap.open_data(season)
+            result = pd.DataFrame([])
+            for game in data:
+                players = pd.json_normalize(game["rosterSpots"])
+                shotongoalEvent = get_dataframe_from_shot_on_goal_event(players,game["plays"])
+                goalEvent = get_dataframe_from_goal_event(players,game["plays"])
+                result = pd.concat([result,shotongoalEvent,goalEvent])
+            result.to_csv(f"{dataScrap.dest_folder}/{season}.csv")
         return result
 
 
 
 if __name__ == "__main__":
-    df = get_dataframe_from_data("20242025")
+    df = get_dataframe_from_data("20182019")
+
     print(df)
     
