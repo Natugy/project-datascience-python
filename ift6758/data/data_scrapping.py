@@ -17,7 +17,7 @@ class LNHDataScrapper:
         if os.path.exists(self.dest_folder) ==False:
             os.mkdir(self.dest_folder)
 
-    def generate_playoff_game_ids(season_start_year: int):
+    def generate_playoff_game_ids(self,season):
         game_ids = []
         game_type = "03"  # playoffs
 
@@ -33,7 +33,7 @@ class LNHDataScrapper:
             for matchup in range(1, matchups + 1):
                 for game in range(1, 8):  # jusqu’à 7 matchs possibles
                     game_number = f"0{rnd}{matchup}{game}"
-                    game_id = f"{season_start_year}{game_type}{game_number}"
+                    game_id = f"{season[0:4]}{game_type}{game_number}"
                     game_ids.append(game_id)
         
         return game_ids
@@ -62,7 +62,7 @@ class LNHDataScrapper:
         data : list = []
         filename = f"{self.dest_folder}{season}.json"
         max_game = 1353
-        for i in tqdm(range(1,max_game),desc= "Téléchargement de la saison régulière"):
+        for i in tqdm(range(1,max_game+1),desc= "Téléchargement de la saison régulière"):
             try:
                 game = self.get_one_game(f"{season[0:4]}02{i:04}")
                 data.append(game)
