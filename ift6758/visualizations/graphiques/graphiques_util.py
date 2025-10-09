@@ -74,6 +74,10 @@ def calculate_distance(shot_row):
     normalized_x = abs(shot_row['xCoord'])
     normalized_y = abs(shot_row['yCoord'])
 
+     # Vérifier si les coordonnées sont valides
+    if pd.isna(normalized_x) or pd.isna(normalized_y):
+        return 0
+
     distance = int(sqrt((normalized_x - goal_x)**2 + (normalized_y - goal_y)**2))
     return distance
 
@@ -82,11 +86,16 @@ def afficher_graphique_distance_but(df,saison):
     
     # Appliquer le calcul de distance. ajouter une colone au dataframe
     df['distance_to_goal'] = df.apply(calculate_distance, axis=1)
+    min_val = df['distance_to_goal'].min()
+    max_val = df['distance_to_goal'].max()
+    
+    # Créer des bins de min_val à max_val
+    bins = np.linspace(min_val, max_val, 11)  # 11 points = 10 intervalles
 
     # Créer des intervalles de distance (bins)
     # ca assure une stabilité statistique pour la definition des probabilités
     # la probabilité d'un tir a partir une distance x d'etre un but peut-être 0 ou 1  
-    df['distance_bin'] = pd.cut(df['distance_to_goal'], bins=10, precision=0)
+    df['distance_bin'] = pd.cut(df['distance_to_goal'], bins=bins, precision=0)
     
     # Calculer la probabilité de but pour chaque intervalle de distance
     distance_analysis = df.groupby(['distance_bin', 'typeDescKey']).size().reset_index(name='count')
@@ -110,7 +119,13 @@ def afficher_graphique_distance_but(df,saison):
 def afficher_graphique_pourcentage_dist_type(df, saison):
     
     df['distance_to_goal'] = df.apply(calculate_distance, axis=1)
-    df['distance_bin'] = pd.cut(df['distance_to_goal'], bins=10, precision=0)
+    min_val = df['distance_to_goal'].min()
+    max_val = df['distance_to_goal'].max()
+    
+    # Créer des bins de min_val à max_val
+    bins = np.linspace(min_val, max_val, 11)  # 11 points = 10 intervalles
+
+    df['distance_bin'] = pd.cut(df['distance_to_goal'], bins=bins, precision=0,include_lowest=True)
 
     # Obtenir tous les types de tirs
     all_shot_types = df['shotType'].value_counts().index
@@ -141,7 +156,13 @@ def afficher_graphique_pourcentage_dist_type(df, saison):
 
 def afficher_graphique_pourcentage_dist_types(df, saison):
     df['distance_to_goal'] = df.apply(calculate_distance, axis=1)
-    df['distance_bin'] = pd.cut(df['distance_to_goal'], bins=10, precision=0)
+    min_val = df['distance_to_goal'].min()
+    max_val = df['distance_to_goal'].max()
+    
+    # Créer des bins de min_val à max_val
+    bins = np.linspace(min_val, max_val, 11)  # 11 points = 10 intervalles
+
+    df['distance_bin'] = pd.cut(df['distance_to_goal'], bins=bins, precision=0)
 
     # 2) Agrégation par (distance_bin, shotType, typeDescKey)
     grouped = (
