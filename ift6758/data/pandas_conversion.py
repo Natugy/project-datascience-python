@@ -1,6 +1,6 @@
 import pandas as pd
 import os
-from data_scrapping import LNHDataScrapper
+from .data_scrapping import LNHDataScrapper
 
 
 def get_playerName_from_game(game_players_data : pd.DataFrame,searchedPlayerId):
