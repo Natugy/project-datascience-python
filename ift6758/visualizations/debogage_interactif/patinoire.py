@@ -22,7 +22,7 @@ def draw_rink(ax: plt.Axes, away_label=str, home_label=str) -> None:
     ax.set_ylim(*RINK_Y)
     ax.set_facecolor("white") 
 
-    # ---------- fond blanc à coins arrondis ----------
+    # fond blanc à coins arrondis 
     for cx, cy, a1, a2 in [
         (RINK_X[0]+CR, RINK_Y[0]+CR, 180, 270),
         (RINK_X[0]+CR, RINK_Y[1]-CR,  90, 180),
@@ -44,7 +44,7 @@ def draw_rink(ax: plt.Axes, away_label=str, home_label=str) -> None:
     ]:
         ax.add_patch(Arc((cx, cy), 2*CR, 2*CR, theta1=th1, theta2=th2, color="black", lw=LW_B))
 
-    # ---------- lignes principales ----------
+    # lignes principales
     # centrale (pointillée fine)
     v = ax.axvline(0, color=RED, linewidth=LW_L)
     v.set_dashes([6, 6])
@@ -55,7 +55,7 @@ def draw_rink(ax: plt.Axes, away_label=str, home_label=str) -> None:
     for x in (-89, 89):
         ax.axvline(x, color=RED, linewidth=LW_L)
 
-    # ---------- cercles & points de mise au jeu ----------
+    # cercles & points de mise au jeu 
     # cercles offensifs/défensifs (centres ~ ±69, ±22 ; R=15)
     o_centers = [( 69,  22), ( 69, -22), (-69,  22), (-69, -22)]
     for cx, cy in o_centers:
@@ -76,7 +76,7 @@ def draw_rink(ax: plt.Axes, away_label=str, home_label=str) -> None:
     # petit demi-cercle "au bas" au centre
     ax.add_patch(Arc((0, RINK_Y[0]), 16, 16, theta1=0, theta2=180, color=RED, lw=1.0))
 
-    # ---------- creases & cages ----------
+    # creases & cages des buts
     # crease (demi-disque bleu clair) + montant du but gris
     ax.add_patch(Wedge(center=(-89, 0), r=6.0, theta1=-90, theta2=90,
                        facecolor=PALEB, edgecolor=BLUE, linewidth=1.2, alpha=0.8))
@@ -93,7 +93,7 @@ def draw_rink(ax: plt.Axes, away_label=str, home_label=str) -> None:
         ax.plot([x0, x1], [ y0,  y1], color=RED, lw=1.1)
         ax.plot([x0, x1], [-y0, -y1], color=RED, lw=1.1)
 
-    # ---------- libellés & axes ----------
+    # libellés & axes 
     ax.text(-50, RINK_Y[1]+1.2, away_label, ha="center", va="bottom", fontsize=10)
     ax.text( 50, RINK_Y[1]+1.2, home_label, ha="center", va="bottom", fontsize=10)
 

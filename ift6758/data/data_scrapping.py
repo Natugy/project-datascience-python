@@ -102,10 +102,10 @@ class LNHDataScrapper:
             data = self.get_season_data(season)
         return data
 
-    
-
 
 if __name__ == "__main__":
     scrap = LNHDataScrapper()
-    data = scrap.open_data("20182019")
-
+    for season in [f"{y}{y+1}" for y in range(2016, 2024)]:
+        print(f"Processing season {season}")
+        scrap.open_data(season)
+        print(f"Season {season} data downloaded and saved.")  

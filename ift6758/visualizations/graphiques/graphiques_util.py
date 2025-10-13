@@ -74,7 +74,7 @@ def calculate_distance(shot_row):
     normalized_x = abs(shot_row['xCoord'])
     normalized_y = abs(shot_row['yCoord'])
 
-    distance = int(sqrt((normalized_x - goal_x)**2 + (normalized_y - goal_y)**2))
+    distance = sqrt((normalized_x - goal_x)**2 + (normalized_y - goal_y)**2)
     return distance
 
 """  """

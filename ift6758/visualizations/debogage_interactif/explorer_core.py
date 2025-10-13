@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import json
 import os
 from functools import lru_cache
@@ -6,24 +7,39 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ift6758.data.data_scrapping import LNHDataScrapper
 
-# Types de saison NHL (API gameId = {YYYY}{02/03}{####})
+# Types de saison NHL
 REGULAR = "02"
 PLAYOFF = "03"
 
-# ------------------------- Utilitaires gameId -------------------------
+# ------------------------- bornes régulière par saison -------------------------
+
+def regular_max_guess(season: str) -> int:
+    """Borne supérieure plausible du nombre de matchs de saison régulière pour une saison donnée."""
+    first = int(season[:4])
+    # approx nb équipes
+    if first >= 2021: teams = 32
+    elif first >= 2017: teams = 31
+    else: teams = 30
+    special = {}
+    return special.get(season, (teams * 82) // 2)
+
+# ------------------------- utilitaires gameId -------------------------
 
 def build_game_id(season: str, season_type: str, game_number: int) -> str:
     """
-    season       : '20172018'
-    season_type  : '02' (REGULAR) | '03' (PLAYOFF)
-    game_number  : 1..N
+    season      : '20172018'
+    season_type : '02' (REGULAR) | '03' (PLAYOFF)
+    game_number : 1..N (REGULAR) ou 0RMG pour PLAYOFF (R=1..4, M selon ronde, G=1..7)
     """
     return f"{season[:4]}{season_type}{int(game_number):04d}"
 
-# ------------------------- Chargement des données -------------------------
+def playoff_number(round_: int, matchup: int, game_in_series: int) -> int:
+    """Construit 0RMG -> ex: finale G7 = 0417 (R=4,M=1,G=7)."""
+    return int(f"0{round_}{matchup}{game_in_series}")
 
-def _try_load_local(game_id: str, dest_folder: str) -> Optional[Dict[str, Any]]:
-    """Charge ./ressources/{game_id}.json s'il existe (évite les appels réseau)."""
+# ------------------------- chargement données -------------------------
+
+def _try_load_local_json(game_id: str, dest_folder: str) -> Optional[Dict[str, Any]]:
     path = os.path.join(dest_folder, f"{game_id}.json")
     if os.path.exists(path):
         try:
@@ -35,14 +51,10 @@ def _try_load_local(game_id: str, dest_folder: str) -> Optional[Dict[str, Any]]:
 
 @lru_cache(maxsize=4096)
 def _fetch_game_cached(game_id: str) -> Dict[str, Any]:
-    """
-    Retourne le JSON play-by-play pour un game_id NHL.
-    Priorité au cache disque local (./ressources/) créé par ton scraper.
-    """
-    scr = LNHDataScrapper()  # définit dest_folder = ./ressources/
-    data = _try_load_local(game_id, scr.dest_folder)
+    """Retourne le JSON play-by-play (cache mémoire + disque ./ressources/)."""
+    scr = LNHDataScrapper()
+    data = _try_load_local_json(game_id, scr.dest_folder)
     if data is None:
-        # On récupère sur l’API et on sauvegarde localement pour les prochaines fois
         data = scr.get_one_game(game_id, save=True) or {}
     if not isinstance(data.get("plays"), list):
         data["plays"] = []
@@ -58,7 +70,7 @@ def _team_name(team_dict: Optional[Dict[str, Any]]) -> Optional[str]:
     )
 
 def load_game(season: str, season_type: str, game_number: int) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
-    """Retourne (meta, plays) pour l'UI Streamlit."""
+    """Retourne (meta, plays) pour l'UI."""
     gid = build_game_id(season, season_type, game_number)
     data = _fetch_game_cached(gid)
     plays = data.get("plays", [])
@@ -73,7 +85,7 @@ def load_game(season: str, season_type: str, game_number: int) -> Tuple[Dict[str
     }
     return meta, plays
 
-# ------------------------- Lecture d’un événement -------------------------
+# ------------------------- lecture d’un événement -------------------------
 
 def event_xy(ev: Dict[str, Any]) -> Optional[Tuple[float, float]]:
     det = ev.get("details") or {}
@@ -118,24 +130,19 @@ def shooter_goalie(ev: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
     return shooter, goalie
 
 def event_strength(ev: Dict[str, Any]) -> Optional[str]:
-    # souvent présent pour les buts
-    det = ev.get("details") or {}
-    s = det.get("strength")
+    s = (ev.get("details") or {}).get("strength")
     return s.upper() if isinstance(s, str) else None
 
 def event_zone(ev: Dict[str, Any]) -> Optional[str]:
-    det = ev.get("details") or {}
-    z = det.get("zoneCode")
+    z = (ev.get("details") or {}).get("zoneCode")
     return z if isinstance(z, str) else None
 
 def event_shot_type(ev: Dict[str, Any]) -> Optional[str]:
-    det = ev.get("details") or {}
-    s = det.get("shotType")
+    s = (ev.get("details") or {}).get("shotType")
     return s if isinstance(s, str) else None
 
 def event_empty_net(ev: Dict[str, Any]) -> Optional[bool]:
-    det = ev.get("details") or {}
-    en = det.get("emptyNet")
+    en = (ev.get("details") or {}).get("emptyNet")
     return bool(en) if en is not None else None
 
 def event_summary_row(idx: int, ev: Dict[str, Any]) -> Dict[str, Any]:
@@ -155,7 +162,7 @@ def event_summary_row(idx: int, ev: Dict[str, Any]) -> Dict[str, Any]:
         goalie=goalie,
     )
 
-# ------------------------- Filtrage -------------------------
+# ------------------------- filtrage -------------------------
 
 def filter_events(
     plays: List[Dict[str, Any]],
@@ -163,7 +170,6 @@ def filter_events(
     types: Optional[List[str]] = None,
     period_filter: Optional[List[int]] = None,
 ) -> List[int]:
-    """Renvoie les indices conservés après filtres."""
     keep: List[int] = []
     for i, ev in enumerate(plays):
         if types and (event_type(ev) not in types):
@@ -175,7 +181,7 @@ def filter_events(
         keep.append(i)
     return keep
 
-# Palette couleur par type (cohérente UI)
+# palette couleur par type (UI)
 EVENT_COLOR = {
     "goal": "#1e88e5",
     "shot-on-goal": "#1e88e5",

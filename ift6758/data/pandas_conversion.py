@@ -1,6 +1,17 @@
 import pandas as pd
 import os
-from data_scrapping import LNHDataScrapper
+
+# --- imports robustes pour marcher en package, script, ou notebook ---
+try:
+    # Cas normal: import relatif quand appelé via "ift6758.data.pandas_conversion"
+    from .data_scrapping import LNHDataScrapper
+except Exception:
+    try:
+        # Cas où on est importé en absolu depuis la racine du repo
+        from ift6758.data.data_scrapping import LNHDataScrapper
+    except Exception:
+        # Dernier recours (ex: exécution du .py directement, notebook dans le même dossier)
+        from data_scrapping import LNHDataScrapper
 
 
 def get_playerName_from_game(game_players_data : pd.DataFrame,searchedPlayerId):
@@ -70,7 +81,7 @@ def get_dataframe_from_data(season):
 
 
 if __name__ == "__main__":
-    df = get_dataframe_from_data("20182019")
-
-    print(df)
-    
+    for season in [f"{y}{y+1}" for y in range(2016, 2024)]:
+        get_dataframe_from_data(season)
+        print(f"Season {season} data processed and saved as CSV.")
+    print("All seasons processed.")
