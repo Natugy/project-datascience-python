@@ -1,7 +1,7 @@
 '''
 User guide to run this Streamlit app (from the root of the repo):
-(ift6758-venv) PS D:\Bureau\project-datascience-python> $env:PYTHONPATH="$PWD"
-(ift6758-venv) PS D:\Bureau\project-datascience-python> streamlit run ift6758\visualizations\debogage_interactif\app_event_explorer.py
+$env:PYTHONPATH="$PWD"
+streamlit run ift6758\visualizations\debogage_interactif\app_event_explorer.py
 '''
 
 import os 
