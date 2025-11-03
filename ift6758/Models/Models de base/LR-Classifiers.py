@@ -262,6 +262,7 @@ def generate_random_baseline(y_true):
 
 # main function pour tester le code
 def main():
+
     wandb.init(
         project="IFT6758-2025",
         name="LR-Classifier-Models"
