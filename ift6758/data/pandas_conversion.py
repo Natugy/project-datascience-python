@@ -187,6 +187,11 @@ def get_dataframe_from_data(season):
         result.to_csv(data_csv, index=False)
     return result
 
+def get_seasons_dataframe(begin,end):
+    df = pd.DataFrame()
+    for season in [f"{y}{y+1}" for y in range(begin, end)]:
+        df = pd.concat([df,get_dataframe_from_data(season)], ignore_index=True)
+    return df
 
 if __name__ == "__main__":
     for season in [f"{y}{y+1}" for y in range(2016, 2024)]:
