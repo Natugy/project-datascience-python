@@ -144,6 +144,39 @@ def _owner_to_abbr(owner_id, meta):
     return None
 
 
+def get_dataframe_from_other_event(players, plays):
+    df = pd.DataFrame(plays)
+    filterValue = ['missed-shot','goal','shot-on-goal']
+    if df.empty:
+        return pd.DataFrame(columns=[
+            'teamId', 'period', 'timeInPeriod', 'shotType', 'xCoord', 'yCoord',
+            'shooterId', 'shooterName', 'goalieId', 'goalieName', 'typeDescKey',
+            'zoneCode'
+        ])
+    details = pd.json_normalize(df["details"])
+    period = pd.json_normalize(df['periodDescriptor'])
+    df = df[~df["typeDescKey"].isin(filterValue)].copy()
+    if df.empty:
+        return pd.DataFrame(columns=[
+            'teamId', 'period', 'timeInPeriod', 'shotType', 'xCoord', 'yCoord',
+            'shooterId', 'shooterName', 'goalieId', 'goalieName', 'typeDescKey',
+            'zoneCode'
+        ])
+    df["xCoord"] = details.get("xCoord")
+    df["yCoord"] = details.get("yCoord")
+    df["zoneCode"] = details.get("zoneCode")          
+    df["shooterId"] = None
+    df["shooterName"] = None
+    df["goalieId"] = None
+    df["goalieName"] = None
+    df["shotType"] = None
+    df["period"] = period.get("number")
+    df["teamId"] = details.get("eventOwnerTeamId")
+    return df[['teamId', 'period', 'timeInPeriod', 'shotType', 'xCoord', 'yCoord',
+               'shooterId', 'shooterName', 'goalieId', 'goalieName', 'typeDescKey',
+               'zoneCode']]
+
+
 def get_dataframe_from_data(season):
     dataScrap = LNHDataScrapper()
     data_csv = f"{dataScrap.dest_folder}/{season}.csv"
@@ -162,9 +195,14 @@ def get_dataframe_from_data(season):
         df_sog   = get_dataframe_from_shot_on_goal_event(players, plays)
         df_goal  = get_dataframe_from_goal_event(players, plays)
         df_miss  = get_dataframe_from_missed_shot_event(players, plays)
-
+        df_other = get_dataframe_from_other_event(players,plays)
         # Concat locale
-        df_game = pd.concat([df_sog, df_goal, df_miss], ignore_index=True)
+        dfs = [df_sog, df_goal, df_miss, df_other]
+# Garder seulement les DataFrames non vides
+        dfs = [df for df in dfs if not df.empty]
+
+        df_game = pd.concat(dfs, ignore_index=True)
+        # df_game = pd.concat([df_sog, df_goal, df_miss,df_other], ignore_index=True) old version
         if df_game.empty:
             continue
 
@@ -180,6 +218,7 @@ def get_dataframe_from_data(season):
 
         # Nettoyage minimal
         df_game = df_game.dropna(subset=["xCoord", "yCoord"])
+        df_game = df_game.sort_values(by=['period', 'timeInPeriod'])
         result = pd.concat([result, df_game], ignore_index=True)
 
     # Sauvegarde complète avec colonnes utiles aux cartes
