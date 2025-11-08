@@ -377,15 +377,18 @@ def main():
     #y_scores_random = generate_random_baseline(y_val)
 
     # Sauvegarder les 3 figures dans un pdf
-    output_dir = Path(__file__).parent.parent.parent / "figures"
-    output_dir.mkdir(exist_ok=True)
+    output_dir = Path(__file__).resolve().parent.parent.parent.parent / "figures" / "milestone2"
+    output_dir.mkdir(parents=True, exist_ok=True)
     pdf_path = output_dir / "LR_Classifiers.pdf"
+    print(f"\n Sauvegarde du PDF dans: {pdf_path}")
     
     with PdfPages(pdf_path) as pdf:
         for i, fig in enumerate(figures, 1):
             pdf.savefig(fig, bbox_inches='tight')
             print(f"Page {i} ajoutée au PDF")
-
+    
+    print(f"PDF sauvegardé avec succès: {pdf_path}")
+    print(f"Nombre de pages: {len(figures)}")
     
     # Fermer wandb
     wandb.finish()

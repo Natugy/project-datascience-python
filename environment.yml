@@ -17,3 +17,10 @@ dependencies:
   - ipywidgets
   - jupyterlab>=3.0.0
   - ipdb
+  - xgboost
+  - scikit-learn
+  - joblib
+  - shap
+  - pip:
+    - wandb
+    - streamlit

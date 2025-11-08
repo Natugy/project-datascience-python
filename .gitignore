@@ -135,3 +135,20 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# Data (après réorganisation)
+data/raw/*.csv
+data/raw/*.json
+data/processed/*.csv
+
+# Models
+models/*.pkl
+models/*.model
+
+# Wandb
+wandb/
+wandb-metadata.json
+
+# Caches
+.pytest_cache/
+.mypy_cache/

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from functools import lru_cache
 from typing import Dict, Tuple, Any, Union
 
@@ -8,7 +9,8 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.ndimage import gaussian_filter
-
+import plotly.graph_objects as go
+import base64
 # =========================
 # Utilitaires coordonnées
 # =========================
@@ -292,3 +294,4 @@ def plot_team_season(
         plt.show()
 
     return fig, ax
+

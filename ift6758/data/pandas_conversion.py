@@ -1,170 +1,174 @@
-import pandas as pd
-import os
+"""
+Conversion des données JSON NHL en DataFrames pandas.
+"""
 
-# --- imports robustes pour marcher en package, script, ou notebook ---
+import pandas as pd
+import logging
+from pathlib import Path
+from typing import Dict, List, Optional
+
+# Configuration du logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Imports robustes pour différents contextes d'exécution
 try:
-    # Cas normal: import relatif quand appelé via "ift6758.data.pandas_conversion"
     from .data_scrapping import LNHDataScrapper
-except Exception:
+except ImportError:
     try:
-        # Cas où on est importé en absolu depuis la racine du repo
         from ift6758.data.data_scrapping import LNHDataScrapper
-    except Exception:
-        # Dernier recours (ex: exécution du .py directement, notebook dans le même dossier)
+    except ImportError:
         from data_scrapping import LNHDataScrapper
 
 
-def get_playerName_from_game(game_players_data: pd.DataFrame, searchedPlayerId):
-    """Permet de récupérer le nom d'un joueur en donnant l'ID."""
-    searchedPlayer = game_players_data.loc[game_players_data['playerId'] == searchedPlayerId]
-    if len(searchedPlayer) == 0:
+def get_playerName_from_game(game_players_data: pd.DataFrame, player_id) -> Optional[str]:
+    """
+    Récupère le nom complet d'un joueur à partir de son ID.
+    
+    Args:
+        game_players_data: DataFrame des joueurs du match
+        player_id: ID du joueur recherché
+        
+    Returns:
+        Nom complet du joueur ou None si introuvable
+    """
+    if pd.isna(player_id) or game_players_data.empty:
         return None
-    first_name = searchedPlayer['firstName.default'].iloc[0]
-    last_name = searchedPlayer['lastName.default'].iloc[0]
+    
+    player = game_players_data.loc[game_players_data['playerId'] == player_id]
+    
+    if len(player) == 0:
+        return None
+    
+    first_name = player['firstName.default'].iloc[0]
+    last_name = player['lastName.default'].iloc[0]
     return f"{first_name} {last_name}"
 
 
-def get_dataframe_from_shot_on_goal_event(players, plays):
+# Colonnes standardisées pour tous les types d'événements
+STANDARD_COLUMNS = [
+    'teamId', 'period', 'timeInPeriod', 'shotType', 'xCoord', 'yCoord',
+    'shooterId', 'shooterName', 'goalieId', 'goalieName', 'typeDescKey', 'zoneCode'
+]
+
+
+def _extract_event_dataframe(
+    players: pd.DataFrame,
+    plays: List[Dict],
+    event_types: List[str],
+    shooter_id_field: str = "shootingPlayerId",
+    scorer_id_field: str = "scoringPlayerId"
+) -> pd.DataFrame:
+    """
+    Fonction générique pour extraire un DataFrame d'événements.
+    Élimine la duplication de code entre shot-on-goal, goal, missed-shot.
+    
+    Args:
+        players: DataFrame des joueurs du match
+        plays: Liste des événements du match
+        event_types: Types d'événements à filtrer (ex: ['goal'])
+        shooter_id_field: Nom du champ pour l'ID du tireur dans details
+        scorer_id_field: Nom du champ alternatif pour les buts
+        
+    Returns:
+        DataFrame avec les colonnes standardisées
+    """
     df = pd.DataFrame(plays)
-    filterValue = ['shot-on-goal']
+    
+    # Retourner DataFrame vide si pas de données
     if df.empty:
-        return pd.DataFrame(columns=[
-            'teamId', 'period', 'timeInPeriod', 'shotType', 'xCoord', 'yCoord',
-            'shooterId', 'shooterName', 'goalieId', 'goalieName', 'typeDescKey',
-            'zoneCode'   
-        ])
+        return pd.DataFrame(columns=STANDARD_COLUMNS)
+    
+    # Extraire les details et période
     details = pd.json_normalize(df["details"])
     period = pd.json_normalize(df['periodDescriptor'])
-    df = df[df["typeDescKey"].isin(filterValue)].copy()
+    
+    # Filtrer par type d'événement
+    df = df[df["typeDescKey"].isin(event_types)].copy()
+    
     if df.empty:
-        return pd.DataFrame(columns=[
-            'teamId', 'period', 'timeInPeriod', 'shotType', 'xCoord', 'yCoord',
-            'shooterId', 'shooterName', 'goalieId', 'goalieName', 'typeDescKey',
-            'zoneCode'
-        ])
+        return pd.DataFrame(columns=STANDARD_COLUMNS)
+    
+    # Extraire les coordonnées
     df["xCoord"] = details.get("xCoord")
     df["yCoord"] = details.get("yCoord")
-    df["zoneCode"] = details.get("zoneCode")             
-    df["shooterId"] = details.get("shootingPlayerId")
-    df["shooterName"] = df["shooterId"].apply(lambda pid: get_playerName_from_game(players, pid))
+    df["zoneCode"] = details.get("zoneCode")
+    
+    # Déterminer quel champ utiliser pour le tireur
+    if "goal" in event_types:
+        df["shooterId"] = details.get(scorer_id_field)
+    else:
+        df["shooterId"] = details.get(shooter_id_field)
+    
+    df["shooterName"] = df["shooterId"].apply(
+        lambda pid: get_playerName_from_game(players, pid)
+    )
+    
+    # Gardien et type de tir
     df["goalieId"] = details.get("goalieInNetId")
-    df["goalieName"] = df["goalieId"].apply(lambda pid: get_playerName_from_game(players, pid))
+    df["goalieName"] = df["goalieId"].apply(
+        lambda pid: get_playerName_from_game(players, pid)
+    )
     df["shotType"] = details.get("shotType")
     df["period"] = period.get("number")
     df["teamId"] = details.get("eventOwnerTeamId")
-    return df[['teamId', 'period', 'timeInPeriod', 'shotType', 'xCoord', 'yCoord',
-               'shooterId', 'shooterName', 'goalieId', 'goalieName', 'typeDescKey',
-               'zoneCode']]
+    
+    return df[STANDARD_COLUMNS]
 
 
-def get_dataframe_from_goal_event(players, plays):
+def get_dataframe_from_shot_on_goal_event(players: pd.DataFrame, plays: List[Dict]) -> pd.DataFrame:
+    """Extrait les événements de tirs au but (shot-on-goal)."""
+    return _extract_event_dataframe(
+        players, plays, 
+        event_types=['shot-on-goal'],
+        shooter_id_field="shootingPlayerId"
+    )
+
+
+def get_dataframe_from_goal_event(players: pd.DataFrame, plays: List[Dict]) -> pd.DataFrame:
+    """Extrait les événements de buts."""
+    return _extract_event_dataframe(
+        players, plays,
+        event_types=['goal'],
+        scorer_id_field="scoringPlayerId"
+    )
+
+
+def get_dataframe_from_missed_shot_event(players: pd.DataFrame, plays: List[Dict]) -> pd.DataFrame:
+    """Extrait les événements de tirs manqués."""
+    return _extract_event_dataframe(
+        players, plays,
+        event_types=['missed-shot'],
+        shooter_id_field="shootingPlayerId"
+    )
+
+
+def get_dataframe_from_other_event(players: pd.DataFrame, plays: List[Dict]) -> pd.DataFrame:
+    """
+    Extrait les autres événements (non-tirs).
+    Utile pour le contexte (faceoff, hit, etc.)
+    """
     df = pd.DataFrame(plays)
-    filterValue = ['goal']
+    
+    # Événements de tirs à exclure
+    shot_events = ['missed-shot', 'goal', 'shot-on-goal']
+    
     if df.empty:
-        return pd.DataFrame(columns=[
-            'teamId', 'period', 'timeInPeriod', 'shotType', 'xCoord', 'yCoord',
-            'shooterId', 'shooterName', 'goalieId', 'goalieName', 'typeDescKey',
-            'zoneCode'
-        ])
+        return pd.DataFrame(columns=STANDARD_COLUMNS)
+    
     details = pd.json_normalize(df["details"])
     period = pd.json_normalize(df['periodDescriptor'])
-    df = df[df["typeDescKey"].isin(filterValue)].copy()
+    
+    # Garder uniquement les non-tirs
+    df = df[~df["typeDescKey"].isin(shot_events)].copy()
+    
     if df.empty:
-        return pd.DataFrame(columns=[
-            'teamId', 'period', 'timeInPeriod', 'shotType', 'xCoord', 'yCoord',
-            'shooterId', 'shooterName', 'goalieId', 'goalieName', 'typeDescKey',
-            'zoneCode'
-        ])
+        return pd.DataFrame(columns=STANDARD_COLUMNS)
+    
+    # Pour les autres événements, pas de données de tir
     df["xCoord"] = details.get("xCoord")
     df["yCoord"] = details.get("yCoord")
-    df["zoneCode"] = details.get("zoneCode")           
-    df["shooterId"] = details.get("scoringPlayerId")
-    df["shooterName"] = df["shooterId"].apply(lambda pid: get_playerName_from_game(players, pid))
-    df["goalieId"] = details.get("goalieInNetId")
-    df["goalieName"] = df["goalieId"].apply(lambda pid: get_playerName_from_game(players, pid))
-    df["shotType"] = details.get("shotType")
-    df["period"] = period.get("number")
-    df["teamId"] = details.get("eventOwnerTeamId")
-    return df[['teamId', 'period', 'timeInPeriod', 'shotType', 'xCoord', 'yCoord',
-               'shooterId', 'shooterName', 'goalieId', 'goalieName', 'typeDescKey',
-               'zoneCode']]
-
-
-def get_dataframe_from_missed_shot_event(players, plays):
-    """inclut les tirs manqués pour avoir tous les tirs non bloqués."""
-    df = pd.DataFrame(plays)
-    filterValue = ['missed-shot']
-    if df.empty:
-        return pd.DataFrame(columns=[
-            'teamId', 'period', 'timeInPeriod', 'shotType', 'xCoord', 'yCoord',
-            'shooterId', 'shooterName', 'goalieId', 'goalieName', 'typeDescKey',
-            'zoneCode'
-        ])
-    details = pd.json_normalize(df["details"])
-    period = pd.json_normalize(df['periodDescriptor'])
-    df = df[df["typeDescKey"].isin(filterValue)].copy()
-    if df.empty:
-        return pd.DataFrame(columns=[
-            'teamId', 'period', 'timeInPeriod', 'shotType', 'xCoord', 'yCoord',
-            'shooterId', 'shooterName', 'goalieId', 'goalieName', 'typeDescKey',
-            'zoneCode'
-        ])
-    df["xCoord"] = details.get("xCoord")
-    df["yCoord"] = details.get("yCoord")
-    df["zoneCode"] = details.get("zoneCode")          
-    # Pour missed-shot, pas toujours de shooterId, on tente 'shootingPlayerId'
-    df["shooterId"] = details.get("shootingPlayerId")
-    df["shooterName"] = df["shooterId"].apply(lambda pid: get_playerName_from_game(players, pid))
-    df["goalieId"] = details.get("goalieInNetId")
-    df["goalieName"] = df["goalieId"].apply(lambda pid: get_playerName_from_game(players, pid))
-    df["shotType"] = details.get("shotType")
-    df["period"] = period.get("number")
-    df["teamId"] = details.get("eventOwnerTeamId")
-    return df[['teamId', 'period', 'timeInPeriod', 'shotType', 'xCoord', 'yCoord',
-               'shooterId', 'shooterName', 'goalieId', 'goalieName', 'typeDescKey',
-               'zoneCode']]
-
-
-def _game_team_meta(game: dict):
-    """Retourne les IDs et abréviations home/away pour mapper teamAbbr."""
-    H = game.get("homeTeam", {}) or game.get("home", {})
-    A = game.get("awayTeam", {}) or game.get("away", {})
-    return {
-        "home_id": H.get("id"),
-        "home_abbr": H.get("abbrev") or H.get("triCode"),
-        "away_id": A.get("id"),
-        "away_abbr": A.get("abbrev") or A.get("triCode"),
-    }
-
-def _owner_to_abbr(owner_id, meta):
-    if owner_id == meta.get("home_id"):
-        return meta.get("home_abbr")
-    if owner_id == meta.get("away_id"):
-        return meta.get("away_abbr")
-    return None
-
-
-def get_dataframe_from_other_event(players, plays):
-    df = pd.DataFrame(plays)
-    filterValue = ['missed-shot','goal','shot-on-goal']
-    if df.empty:
-        return pd.DataFrame(columns=[
-            'teamId', 'period', 'timeInPeriod', 'shotType', 'xCoord', 'yCoord',
-            'shooterId', 'shooterName', 'goalieId', 'goalieName', 'typeDescKey',
-            'zoneCode'
-        ])
-    details = pd.json_normalize(df["details"])
-    period = pd.json_normalize(df['periodDescriptor'])
-    df = df[~df["typeDescKey"].isin(filterValue)].copy()
-    if df.empty:
-        return pd.DataFrame(columns=[
-            'teamId', 'period', 'timeInPeriod', 'shotType', 'xCoord', 'yCoord',
-            'shooterId', 'shooterName', 'goalieId', 'goalieName', 'typeDescKey',
-            'zoneCode'
-        ])
-    df["xCoord"] = details.get("xCoord")
-    df["yCoord"] = details.get("yCoord")
-    df["zoneCode"] = details.get("zoneCode")          
+    df["zoneCode"] = details.get("zoneCode")
     df["shooterId"] = None
     df["shooterName"] = None
     df["goalieId"] = None
@@ -172,68 +176,143 @@ def get_dataframe_from_other_event(players, plays):
     df["shotType"] = None
     df["period"] = period.get("number")
     df["teamId"] = details.get("eventOwnerTeamId")
-    return df[['teamId', 'period', 'timeInPeriod', 'shotType', 'xCoord', 'yCoord',
-               'shooterId', 'shooterName', 'goalieId', 'goalieName', 'typeDescKey',
-               'zoneCode']]
+    
+    return df[STANDARD_COLUMNS]
 
 
-def get_dataframe_from_data(season):
-    dataScrap = LNHDataScrapper()
-    data_csv = f"{dataScrap.dest_folder}/{season}.csv"
+def _game_team_meta(game: Dict) -> Dict:
+    """
+    Extrait les métadonnées des équipes (home/away) d'un match.
+    
+    Returns:
+        Dict avec home_id, home_abbr, away_id, away_abbr
+    """
+    home = game.get("homeTeam", {}) or game.get("home", {})
+    away = game.get("awayTeam", {}) or game.get("away", {})
+    
+    return {
+        "home_id": home.get("id"),
+        "home_abbr": home.get("abbrev") or home.get("triCode"),
+        "away_id": away.get("id"),
+        "away_abbr": away.get("abbrev") or away.get("triCode"),
+    }
 
-    if os.path.exists(data_csv):
+
+def _owner_to_abbr(owner_id, meta: Dict) -> Optional[str]:
+    """Convertit un teamId en abréviation (ex: 8 → 'MTL')."""
+    if owner_id == meta.get("home_id"):
+        return meta.get("home_abbr")
+    if owner_id == meta.get("away_id"):
+        return meta.get("away_abbr")
+    return None
+
+
+def get_dataframe_from_data(season: str) -> pd.DataFrame:
+    """
+    Convertit toutes les données JSON d'une saison en DataFrame pandas.
+    Sauvegarde automatiquement en CSV pour cache.
+    
+    Args:
+        season: Saison au format "20162017"
+        
+    Returns:
+        DataFrame avec tous les événements de la saison
+    """
+    scrapper = LNHDataScrapper()
+    
+    # Utiliser data/raw/ pour les CSV
+    data_csv = scrapper.dest_folder / f"{season}.csv"
+    
+    # Si le CSV existe déjà, le charger directement
+    if data_csv.exists():
+        logger.info(f"Chargement du CSV existant: {data_csv}")
         return pd.read_csv(data_csv)
-
-    games = dataScrap.open_data(season)
-    result = pd.DataFrame([])
-
+    
+    # Charger les données JSON
+    logger.info(f"Conversion de la saison {season} en DataFrame...")
+    games = scrapper.open_data(season)
+    result = pd.DataFrame()
+    
     for game in games:
+        # Extraire les joueurs et événements
         players = pd.json_normalize(game.get("rosterSpots", []))
         plays = game.get("plays", [])
-
-        # Extraire 3 types d'événements de tirs
-        df_sog   = get_dataframe_from_shot_on_goal_event(players, plays)
-        df_goal  = get_dataframe_from_goal_event(players, plays)
-        df_miss  = get_dataframe_from_missed_shot_event(players, plays)
-        df_other = get_dataframe_from_other_event(players,plays)
-        # Concat locale
-        dfs = [df_sog, df_goal, df_miss, df_other]
-# Garder seulement les DataFrames non vides
-        dfs = [df for df in dfs if not df.empty]
-
-        df_game = pd.concat(dfs, ignore_index=True)
-        # df_game = pd.concat([df_sog, df_goal, df_miss,df_other], ignore_index=True) old version
-        if df_game.empty:
+        
+        # Extraire les différents types d'événements
+        df_sog = get_dataframe_from_shot_on_goal_event(players, plays)
+        df_goal = get_dataframe_from_goal_event(players, plays)
+        df_miss = get_dataframe_from_missed_shot_event(players, plays)
+        df_other = get_dataframe_from_other_event(players, plays)
+        
+        # Combiner (filtrer les vides pour éviter warnings)
+        dfs = [df for df in [df_sog, df_goal, df_miss, df_other] if not df.empty]
+        
+        if not dfs:
             continue
-
-        # Enrichir avec idGame & season
+        
+        df_game = pd.concat(dfs, ignore_index=True)
+        
+        # Enrichir avec métadonnées du match
         game_id = game.get("id") or game.get("gamePk") or game.get("gameId")
         game_season = game.get("season")
         df_game["idGame"] = game_id
         df_game["season"] = game_season
-
-        # Mapper l'abréviation d'équipe
+        
+        # Ajouter l'abréviation d'équipe
         meta = _game_team_meta(game)
-        df_game["teamAbbr"] = df_game["teamId"].apply(lambda tid: _owner_to_abbr(tid, meta))
-
+        df_game["teamAbbr"] = df_game["teamId"].apply(
+            lambda tid: _owner_to_abbr(tid, meta)
+        )
+        
         # Nettoyage minimal
         df_game = df_game.dropna(subset=["xCoord", "yCoord"])
         df_game = df_game.sort_values(by=['period', 'timeInPeriod'])
+        
         result = pd.concat([result, df_game], ignore_index=True)
-
-    # Sauvegarde complète avec colonnes utiles aux cartes
+    
+    # Sauvegarder le CSV
     if not result.empty:
+        logger.info(f"Sauvegarde de {len(result)} événements dans {data_csv}")
         result.to_csv(data_csv, index=False)
+    
     return result
 
-def get_seasons_dataframe(begin,end):
-    df = pd.DataFrame()
-    for season in [f"{y}{y+1}" for y in range(begin, end)]:
-        df = pd.concat([df,get_dataframe_from_data(season)], ignore_index=True)
-    return df
 
-if __name__ == "__main__":
+def get_seasons_dataframe(begin: int, end: int) -> pd.DataFrame:
+    """
+    Combine les données de plusieurs saisons en un seul DataFrame.
+    
+    Args:
+        begin: Année de début (ex: 2016)
+        end: Année de fin (ex: 2020)
+        
+    Returns:
+        DataFrame combiné de toutes les saisons
+    """
+    logger.info(f"Chargement des saisons {begin}-{end}...")
+    
+    result = pd.DataFrame()
+    seasons = [f"{y}{y+1}" for y in range(begin, end)]
+    
+    for season in seasons:
+        df_season = get_dataframe_from_data(season)
+        result = pd.concat([result, df_season], ignore_index=True)
+        logger.info(f"{season}: {len(df_season)} événements")
+    
+    logger.info(f"Total: {len(result)} événements")
+    return result
+
+
+def main():
+    """Fonction principale pour convertir toutes les saisons."""
+    logger.info("=== Conversion JSON → CSV ===")
+    
     for season in [f"{y}{y+1}" for y in range(2016, 2024)]:
         df = get_dataframe_from_data(season)
-        print(f"Season {season} -> {len(df)} lignes sauvegardées.")
-    print("All seasons processed.")
+        logger.info(f"{season}: {len(df)} événements sauvegardés")
+    
+    logger.info("=== Conversion terminée ===")
+
+
+if __name__ == "__main__":
+    main()
