@@ -3,13 +3,8 @@ Conversion des données JSON NHL en DataFrames pandas.
 """
 
 import pandas as pd
-import logging
 from pathlib import Path
 from typing import Dict, List, Optional
-
-# Configuration du logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 # Imports robustes pour différents contextes d'exécution
 try:
@@ -220,16 +215,21 @@ def get_dataframe_from_data(season: str) -> pd.DataFrame:
     """
     scrapper = LNHDataScrapper()
     
+    # Trouver la racine du projet
+    project_root = Path(__file__).parent.parent.parent
+    dest_folder = project_root / "data" / "raw"
+    dest_folder.mkdir(parents=True, exist_ok=True)
+    
     # Utiliser data/raw/ pour les CSV
-    data_csv = scrapper.dest_folder / f"{season}.csv"
+    data_csv = dest_folder / f"{season}.csv"
     
     # Si le CSV existe déjà, le charger directement
     if data_csv.exists():
-        logger.info(f"Chargement du CSV existant: {data_csv}")
+        print(f"Chargement du CSV existant: {data_csv}")
         return pd.read_csv(data_csv)
     
     # Charger les données JSON
-    logger.info(f"Conversion de la saison {season} en DataFrame...")
+    print(f"Conversion de la saison {season} en DataFrame...")
     games = scrapper.open_data(season)
     result = pd.DataFrame()
     
@@ -250,7 +250,11 @@ def get_dataframe_from_data(season: str) -> pd.DataFrame:
         if not dfs:
             continue
         
-        df_game = pd.concat(dfs, ignore_index=True)
+        # Suppression du FutureWarning en spécifiant comment gérer les colonnes vides
+        import warnings
+        with warnings.catch_warnings():
+            warnings.filterwarnings('ignore', category=FutureWarning)
+            df_game = pd.concat(dfs, ignore_index=True)
         
         # Enrichir avec métadonnées du match
         game_id = game.get("id") or game.get("gamePk") or game.get("gameId")
@@ -270,9 +274,9 @@ def get_dataframe_from_data(season: str) -> pd.DataFrame:
         
         result = pd.concat([result, df_game], ignore_index=True)
     
-    # Sauvegarder le CSV
+    # Sauvegarder le CSV dans data/raw/
     if not result.empty:
-        logger.info(f"Sauvegarde de {len(result)} événements dans {data_csv}")
+        print(f"Sauvegarde de {len(result)} événements dans {data_csv}")
         result.to_csv(data_csv, index=False)
     
     return result
@@ -289,7 +293,7 @@ def get_seasons_dataframe(begin: int, end: int) -> pd.DataFrame:
     Returns:
         DataFrame combiné de toutes les saisons
     """
-    logger.info(f"Chargement des saisons {begin}-{end}...")
+    print(f"Chargement des saisons {begin}-{end}...")
     
     result = pd.DataFrame()
     seasons = [f"{y}{y+1}" for y in range(begin, end)]
@@ -297,21 +301,21 @@ def get_seasons_dataframe(begin: int, end: int) -> pd.DataFrame:
     for season in seasons:
         df_season = get_dataframe_from_data(season)
         result = pd.concat([result, df_season], ignore_index=True)
-        logger.info(f"{season}: {len(df_season)} événements")
-    
-    logger.info(f"Total: {len(result)} événements")
+        print(f"{season}: {len(df_season)} événements")
+
+    print(f"Total: {len(result)} événements")
     return result
 
 
 def main():
     """Fonction principale pour convertir toutes les saisons."""
-    logger.info("=== Conversion JSON → CSV ===")
+    print("=== Conversion JSON → CSV ===")
     
     for season in [f"{y}{y+1}" for y in range(2016, 2024)]:
         df = get_dataframe_from_data(season)
-        logger.info(f"{season}: {len(df)} événements sauvegardés")
-    
-    logger.info("=== Conversion terminée ===")
+        print(f"{season}: {len(df)} événements sauvegardés")
+
+    print("=== Conversion terminée ===")
 
 
 if __name__ == "__main__":
