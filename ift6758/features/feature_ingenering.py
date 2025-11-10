@@ -1,30 +1,24 @@
 """
 Feature engineering pour la prédiction de buts au hockey (xG).
-Génère les datasets train/val/test avec toutes les features optimisées.
+Génère les datasets train/val/test avec toutes les features.
 """
 
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import logging
+import sys
 from pathlib import Path
 from sklearn.model_selection import train_test_split
 from typing import Tuple
 
 # Configuration du logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
 
-# Import robuste
-try:
-    from .data.pandas_conversion import get_seasons_dataframe
-except ImportError:
-    try:
-        from ift6758.data.pandas_conversion import get_seasons_dataframe
-    except ImportError:
-        import sys
-        sys.path.append(str(Path(__file__).parent.parent))
-        from data.pandas_conversion import get_seasons_dataframe
+# Import simple
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from data.pandas_conversion import get_seasons_dataframe
 
 
 def _convert_time_to_seconds(time_str) -> float:
@@ -42,6 +36,146 @@ def _convert_time_to_seconds(time_str) -> float:
         return minutes * 60 + seconds
     except (ValueError, AttributeError):
         return np.nan
+
+
+def _calculate_powerplay_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Calcule les features de power-play pour chaque tir (BONUS 5%).
+    
+    Features calculées:
+    - time_since_powerplay_start: Temps depuis début PP (secondes), 0 si pas en PP
+    - friendly_skaters: Nombre de joueurs non-gardiens de l'équipe qui tire (3-5)
+    - opponent_skaters: Nombre de joueurs non-gardiens adverses (3-5)
+    
+    Args:
+        df: DataFrame avec les événements triés par match et temps
+        
+    Returns:
+        DataFrame avec les 3 nouvelles colonnes
+    """
+    # Initialiser les colonnes
+    df["time_since_powerplay_start"] = 0.0
+    df["friendly_skaters"] = 5  # Par défaut: 5 joueurs (sans gardien)
+    df["opponent_skaters"] = 5
+    
+    # Charger les événements bruts incluant les pénalités
+    from data.pandas_conversion import LNHDataScrapper
+    
+    scrapper = LNHDataScrapper()
+    project_root = Path(__file__).parent.parent.parent
+    
+    # Charger toutes les saisons nécessaires une seule fois
+    seasons_to_load = {}
+    for season in df['season'].dropna().unique():
+        season_str = str(int(season))
+        if season_str not in seasons_to_load:
+            try:
+                seasons_to_load[season_str] = {
+                    g.get('id'): g for g in scrapper.open_data(season_str)
+                }
+            except Exception as e:
+                logger.warning(f"Impossible de charger la saison {season_str}: {e}")
+                seasons_to_load[season_str] = {}
+    
+    # Traiter chaque match individuellement
+    for game_id in df['idGame'].unique():
+        if pd.isna(game_id):
+            continue
+            
+        game_id = int(game_id)
+        season = df[df['idGame'] == game_id]['season'].iloc[0]
+        season_str = str(int(season))
+        
+        try:
+            # Récupérer les données du match depuis le cache
+            game_data = seasons_to_load.get(season_str, {}).get(game_id)
+            
+            if not game_data:
+                continue
+            
+            # Extraire tous les événements (incluant pénalités)
+            plays = game_data.get('plays', [])
+            
+            # Construire une liste des pénalités avec leur timing
+            penalties = []
+            for play in plays:
+                if play.get('typeDescKey') == 'penalty':
+                    period = play['periodDescriptor']['number']
+                    time_in_period = play['timeInPeriod']
+                    
+                    # Convertir en secondes absolues
+                    time_sec = _convert_time_to_seconds(time_in_period)
+                    game_sec = (period - 1) * 1200 + time_sec
+                    
+                    details = play.get('details', {})
+                    duration_min = details.get('duration', 2)  # Par défaut 2 min
+                    team_id = details.get('eventOwnerTeamId')
+                    
+                    # Ignorer les pénalités de match (duration >= 10 min)
+                    if duration_min >= 10:
+                        continue
+                    
+                    penalties.append({
+                        'game_sec': game_sec,
+                        'duration_sec': duration_min * 60,
+                        'team_id': team_id,
+                        'expires_at': game_sec + duration_min * 60
+                    })
+            
+            # Trier les pénalités par temps
+            penalties.sort(key=lambda x: x['game_sec'])
+            
+            # Appliquer les features PP aux tirs de ce match
+            game_mask = df['idGame'] == game_id
+            
+            for idx in df[game_mask].index:
+                shot_time = df.loc[idx, 'game_seconds']
+                shot_team_id = df.loc[idx, 'teamId']
+                
+                # Trouver les pénalités actives au moment du tir
+                active_penalties_friendly = []  # Pénalités contre l'équipe qui tire
+                active_penalties_opponent = []  # Pénalités contre l'adversaire
+                
+                for pen in penalties:
+                    # La pénalité est-elle active?
+                    if pen['game_sec'] <= shot_time < pen['expires_at']:
+                        if pen['team_id'] == shot_team_id:
+                            # Pénalité contre l'équipe qui tire (désavantage)
+                            active_penalties_friendly.append(pen)
+                        else:
+                            # Pénalité contre l'adversaire (avantage/PP)
+                            active_penalties_opponent.append(pen)
+                
+                # Calculer le nombre de joueurs
+                friendly_skaters = 5 - len(active_penalties_friendly)
+                opponent_skaters = 5 - len(active_penalties_opponent)
+                
+                # Limiter entre 3 et 5
+                friendly_skaters = max(3, min(5, friendly_skaters))
+                opponent_skaters = max(3, min(5, opponent_skaters))
+                
+                df.loc[idx, 'friendly_skaters'] = friendly_skaters
+                df.loc[idx, 'opponent_skaters'] = opponent_skaters
+                
+                # Calculer time_since_powerplay_start
+                if len(active_penalties_opponent) > 0:
+                    # En power-play (avantage numérique)
+                    # Prendre la pénalité la plus ancienne encore active
+                    oldest_pp = min(active_penalties_opponent, key=lambda x: x['game_sec'])
+                    df.loc[idx, 'time_since_powerplay_start'] = shot_time - oldest_pp['game_sec']
+                elif len(active_penalties_friendly) > 0:
+                    # En désavantage numérique
+                    df.loc[idx, 'time_since_powerplay_start'] = 0.0
+                else:
+                    # Situation à forces égales
+                    df.loc[idx, 'time_since_powerplay_start'] = 0.0
+        
+        except Exception as e:
+            # En cas d'erreur, garder les valeurs par défaut pour ce match
+            logger.warning(f"Impossible de calculer les PP features pour le match {game_id}: {e}")
+            continue
+    
+    return df
 
 
 def clean_dataframe(begin: int, end: int) -> pd.DataFrame:
@@ -77,7 +211,7 @@ def clean_dataframe(begin: int, end: int) -> pd.DataFrame:
     df = df[df["typeDescKey"].isin(["shot-on-goal", "goal"])].copy()
     df["is_goal"] = (df["typeDescKey"] == "goal").astype(int)
     
-    logger.info(f"  → {len(df)} tirs/buts retenus ({df['is_goal'].sum()} buts)")
+    logger.info(f"  {len(df)} tirs/buts retenus ({df['is_goal'].sum()} buts)")
     
     # === Feature: Empty net ===
     df["empty_net"] = df.get("emptyNet", pd.Series(0, index=df.index)).fillna(0).astype(int)
@@ -151,11 +285,15 @@ def clean_dataframe(begin: int, end: int) -> pd.DataFrame:
         0
     )
     
+    # === BONUS: Features de Power-Play ===
+    logger.info("Calcul des features de power-play (BONUS)...")
+    df = _calculate_powerplay_features(df)
+    
     # === Sélection des colonnes finales ===
     logger.info("Sélection des features finales...")
     
     df_clean = df[[
-        # Coordonnées
+        # Coordonnées actuelles
         "xCoord", "yCoord",
         # Géométrie
         "distance_net", "angle_net",
@@ -165,8 +303,14 @@ def clean_dataframe(begin: int, end: int) -> pd.DataFrame:
         "game_seconds", "game_period",
         # Type de tir
         "shot_type",
+        # Coordonnées événement précédent (REQUIS par le devoir)
+        "prev_xCoord", "prev_yCoord",
+        # Temps écoulé depuis événement précédent (REQUIS par le devoir)
+        "delta_t",
         # Features dérivées
         "is_rebound", "change_in_angle", "shot_speed", "distance_prev_event",
+        # Power-play features (BONUS 5%)
+        "time_since_powerplay_start", "friendly_skaters", "opponent_skaters",
         # Métadonnées
         "season", "teamAbbr", "idGame",
         # Contexte
@@ -174,6 +318,7 @@ def clean_dataframe(begin: int, end: int) -> pd.DataFrame:
     ]].copy()
     
     logger.info(f"DataFrame nettoyé: {len(df_clean)} tirs, {len(df_clean.columns)} features")
+    logger.info(f"  Features ajoutées: prev_xCoord, prev_yCoord, delta_t")
     
     return df_clean
 
@@ -282,15 +427,15 @@ def generate_train_val_test_datasets(
     logger.info("=== Génération des datasets train/val/test ===")
     
     # Charger et nettoyer les données de train+validation
-    logger.info(f"Chargement des données {train_begin}/{train_begin+1} - {train_end-1}/{train_end} (train + validation)")
+    logger.info(f"Chargement des donnees {train_begin}/{train_begin+1} - {train_end-1}/{train_end} (train + validation)")
     df_train_val = clean_dataframe(train_begin, train_end)
     
     # Mélanger pour éviter les biais temporels
-    logger.info("Mélange des données...")
+    logger.info("Melange des donnees...")
     df_train_val = df_train_val.sample(frac=1, random_state=random_state).reset_index(drop=True)
     
     # Charger les données de test
-    logger.info(f"Chargement des données {test_begin}/{test_begin+1} - {test_end-1}/{test_end} (test)")
+    logger.info(f"Chargement des donnees {test_begin}/{test_begin+1} - {test_end-1}/{test_end} (test)")
     df_test = clean_dataframe(test_begin, test_end)
     
     # Split train/validation avec stratification
@@ -314,11 +459,11 @@ def generate_train_val_test_datasets(
     df_test.to_csv(test_path, index=False)
     
     # Résumé
-    logger.info("\n=== Ensembles de données créés ===")
+    logger.info("=== Ensembles de donnees crees ===")
     logger.info(f"Train: {len(df_train):,} tirs, {df_train['is_goal'].sum():,} buts ({df_train['is_goal'].mean()*100:.2f}%)")
     logger.info(f"Val:   {len(df_val):,} tirs, {df_val['is_goal'].sum():,} buts ({df_val['is_goal'].mean()*100:.2f}%)")
     logger.info(f"Test:  {len(df_test):,} tirs, {df_test['is_goal'].sum():,} buts ({df_test['is_goal'].mean()*100:.2f}%)")
-    logger.info(f"\nFichiers sauvegardés:")
+    logger.info(f"Fichiers sauvegardes:")
     logger.info(f"  - {train_path}")
     logger.info(f"  - {val_path}")
     logger.info(f"  - {test_path}")

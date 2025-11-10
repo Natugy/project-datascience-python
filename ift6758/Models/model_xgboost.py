@@ -86,10 +86,14 @@ class XGBoostModelTrainer:
         X_val: pd.DataFrame,
         y_val: pd.Series,
         features: List[str] = ["distance_net", "angle_net"],
+        scale_pos_weight: Optional[float] = None,
         random_state: int = 42,
     ) -> xgb.XGBClassifier:
         """
         Entraîne un XGBoost baseline avec distance et angle uniquement.
+        
+        Args:
+            scale_pos_weight: Poids pour compenser le déséquilibre des classes
             
         Returns:
             Modèle XGBoost entraîné
@@ -100,6 +104,7 @@ class XGBoostModelTrainer:
             "n_features": len(features),
             "random_state": random_state,
             "use_scaler": self.use_scaler,
+            "scale_pos_weight": scale_pos_weight,
             "hyperparameters": "default"
         }
         
@@ -110,16 +115,20 @@ class XGBoostModelTrainer:
         X_val_subset = X_val[features]
         X_train_scaled, X_val_scaled = self._scale_features(X_train_subset, X_val_subset, fit_scaler=True)
         
-        # Entraîner avec paramètres par défaut
-        self.model = xgb.XGBClassifier(
-            random_state=random_state,
-            eval_metric='logloss'
-        )
+        # Entraîner avec paramètres par défaut + scale_pos_weight
+        params = {
+            'random_state': random_state,
+            'eval_metric': 'logloss'
+        }
+        if scale_pos_weight is not None:
+            params['scale_pos_weight'] = scale_pos_weight
+            
+        self.model = xgb.XGBClassifier(**params)
         
         self.model.fit(
             X_train_scaled,
             y_train,
-            eval_set=[(X_val_scaled, y_val)],
+            eval_set=[(X_train_scaled, y_train), (X_val_scaled, y_val)],
             verbose=False
         )
         
@@ -750,3 +759,761 @@ def load_and_prepare_data(
     print(f"  Test:  {X_test.shape[0]:,} tirs")
     
     return X_train, y_train, X_val, y_val, X_test, y_test
+
+
+def perform_shap_analysis(
+    model: xgb.XGBClassifier,
+    X: pd.DataFrame,
+    max_display: int = 20,
+    sample_size: int = 1000,
+    output_dir: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Effectue une analyse SHAP complète sur un modèle XGBoost.
+    
+    Args:
+        model: Modèle XGBoost entraîné
+        X: Features (DataFrame)
+        max_display: Nombre maximal de features à afficher
+        sample_size: Taille de l'échantillon pour le calcul SHAP
+        output_dir: Dossier de sortie pour sauvegarder les figures
+        
+    Returns:
+        Dict contenant les SHAP values et les figures
+    """
+    try:
+        import shap
+    except ImportError:
+        print("SHAP n'est pas installé. Installation: pip install shap")
+        return {}
+    
+    if output_dir:
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Échantillonner pour la vitesse (SHAP peut être lent)
+    if len(X) > sample_size:
+        X_sample = X.sample(n=sample_size, random_state=42)
+    else:
+        X_sample = X
+    
+    print(f"Calcul des SHAP values sur {len(X_sample)} échantillons...")
+    
+    # Utiliser shap.Explainer avec une fonction de prédiction
+    # Plus robuste pour XGBoost récent
+    print("Initialisation de l'explainer SHAP...")
+    
+    # Créer une fonction de prédiction qui retourne les probabilités
+    def model_predict(X):
+        return model.predict_proba(X)[:, 1]
+    
+    # Utiliser KernelExplainer ou Permutation pour compatibilité
+    explainer = shap.KernelExplainer(model_predict, X_sample)
+    shap_values = explainer.shap_values(X_sample)
+    
+    results = {
+        'shap_values': shap_values,
+        'base_value': explainer.expected_value,
+        'X_sample': X_sample
+    }
+    
+    # 1. Summary Plot (bar) - Importance globale
+    print("\n Generating SHAP Summary Plot (bar)...")
+    fig, ax = plt.subplots(figsize=(10, 8))
+    shap.summary_plot(shap_values, X_sample, plot_type="bar", max_display=max_display, show=False)
+    plt.title('SHAP Feature Importance', fontsize=14, fontweight='bold')
+    plt.tight_layout()
+    if output_dir:
+        plt.savefig(output_dir / 'shap_importance_bar.png', dpi=150, bbox_inches='tight')
+    results['importance_plot'] = fig
+    plt.close()
+    
+    # 2. Summary Plot (beeswarm) - Distribution des impacts
+    print("Generating SHAP Summary Plot (beeswarm)...")
+    fig, ax = plt.subplots(figsize=(10, 8))
+    shap.summary_plot(shap_values, X_sample, max_display=max_display, show=False)
+    plt.title('SHAP Summary Plot - Feature Impact Distribution', fontsize=14, fontweight='bold')
+    plt.tight_layout()
+    if output_dir:
+        plt.savefig(output_dir / 'shap_summary_beeswarm.png', dpi=150, bbox_inches='tight')
+    results['summary_plot'] = fig
+    plt.close()
+    
+    # 3. Dependence Plots pour top 4 features
+    print("Generating SHAP Dependence Plots...")
+    mean_abs_shap = np.abs(shap_values).mean(axis=0)
+    top_features_idx = np.argsort(mean_abs_shap)[::-1][:4]
+    top_features = [X_sample.columns[i] for i in top_features_idx]
+    
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    axes = axes.flatten()
+    
+    for idx, feat_idx in enumerate(top_features_idx):
+        feat_name = X_sample.columns[feat_idx]
+        shap.dependence_plot(
+            feat_idx,
+            shap_values,
+            X_sample,
+            ax=axes[idx],
+            show=False
+        )
+        axes[idx].set_title(f'SHAP Dependence: {feat_name}', fontsize=12, fontweight='bold')
+    
+    plt.tight_layout()
+    if output_dir:
+        plt.savefig(output_dir / 'shap_dependence_plots.png', dpi=150, bbox_inches='tight')
+    results['dependence_plots'] = fig
+    plt.close()
+    
+    # 4. Waterfall plot pour une prédiction exemple
+    print("Generating SHAP Waterfall Plot...")
+    fig, ax = plt.subplots(figsize=(10, 8))
+    shap.waterfall_plot(
+        shap.Explanation(
+            values=shap_values[0],
+            base_values=explainer.expected_value,
+            data=X_sample.iloc[0].values,
+            feature_names=X_sample.columns.tolist()
+        ),
+        max_display=15,
+        show=False
+    )
+    plt.title('SHAP Waterfall Plot - Example Prediction', fontsize=14, fontweight='bold')
+    plt.tight_layout()
+    if output_dir:
+        plt.savefig(output_dir / 'shap_waterfall.png', dpi=150, bbox_inches='tight')
+    results['waterfall_plot'] = fig
+    plt.close()
+    
+    # 5. Force plot (HTML interactive) pour une prédiction
+    print("Generating SHAP Force Plot...")
+    force_plot = shap.force_plot(
+        explainer.expected_value,
+        shap_values[0],
+        X_sample.iloc[0],
+        matplotlib=True,
+        show=False
+    )
+    if output_dir:
+        plt.savefig(output_dir / 'shap_force_plot.png', dpi=150, bbox_inches='tight')
+    plt.close()
+    
+    print(f"\n SHAP analysis complete!")
+    if output_dir:
+        print(f"  Figures saved to {output_dir}")
+    
+    return results
+
+
+def plot_correlation_matrix(
+    X: pd.DataFrame,
+    threshold: float = 0.7,
+    output_path: Optional[str] = None
+) -> plt.Figure:
+    """
+    Affiche une matrice de corrélation pour identifier les features redondantes.
+    
+    Args:
+        X: DataFrame des features
+        threshold: Seuil pour identifier les corrélations fortes
+        output_path: Chemin pour sauvegarder la figure
+        
+    Returns:
+        Figure matplotlib
+    """
+    corr_matrix = X.corr()
+    
+    fig, ax = plt.subplots(figsize=(12, 10))
+    
+    # Masquer le triangle supérieur
+    mask = np.triu(np.ones_like(corr_matrix), k=1)
+    
+    # Heatmap
+    sns.heatmap(
+        corr_matrix,
+        mask=mask,
+        annot=True,
+        fmt='.2f',
+        cmap='coolwarm',
+        center=0,
+        vmin=-1,
+        vmax=1,
+        square=True,
+        linewidths=0.5,
+        cbar_kws={"shrink": 0.8},
+        ax=ax
+    )
+    
+    ax.set_title('Feature Correlation Matrix', fontsize=14, fontweight='bold')
+    plt.tight_layout()
+    
+    if output_path:
+        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    
+    # Identifier les paires fortement corrélées
+    high_corr_pairs = []
+    for i in range(len(corr_matrix.columns)):
+        for j in range(i+1, len(corr_matrix.columns)):
+            if abs(corr_matrix.iloc[i, j]) >= threshold:
+                high_corr_pairs.append((
+                    corr_matrix.columns[i],
+                    corr_matrix.columns[j],
+                    corr_matrix.iloc[i, j]
+                ))
+    
+    if high_corr_pairs:
+        print(f"\n Features fortement corrélées (|r| >= {threshold}):")
+        for feat1, feat2, corr in high_corr_pairs:
+            print(f"   - {feat1} <-> {feat2}: r = {corr:.3f}")
+        print("\n  Considérer la suppression d'une des features dans chaque paire")
+    else:
+        print(f"\n Aucune corrélation forte trouvée (threshold = {threshold})")
+    
+    return fig
+
+
+def perform_recursive_feature_elimination(
+    model_class: Any,
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    X_val: pd.DataFrame,
+    y_val: pd.Series,
+    n_features_to_select: int = 10,
+    step: int = 1,
+    cv: int = 3,
+    **model_kwargs
+) -> Tuple[List[str], plt.Figure]:
+    """
+    Effectue une sélection de features par élimination récursive (RFE).
+    
+    Args:
+        model_class: Classe du modèle (ex: xgb.XGBClassifier)
+        X_train: Features d'entraînement
+        y_train: Labels d'entraînement
+        X_val: Features de validation
+        y_val: Labels de validation
+        n_features_to_select: Nombre de features à sélectionner
+        step: Nombre de features à retirer à chaque itération
+        cv: Nombre de folds pour la cross-validation
+        **model_kwargs: Paramètres du modèle
+        
+    Returns:
+        Tuple (selected_features, figure)
+    """
+    from sklearn.feature_selection import RFE, RFECV
+    
+    print(f"\nRFE: Sélection de {n_features_to_select} features parmi {len(X_train.columns)}...")
+    
+    # Modèle de base
+    estimator = model_class(**model_kwargs)
+    
+    # RFE avec cross-validation
+    rfecv = RFECV(
+        estimator=estimator,
+        step=step,
+        cv=cv,
+        scoring='roc_auc',
+        n_jobs=-1,
+        verbose=0
+    )
+    
+    rfecv.fit(X_train, y_train)
+    
+    # Features sélectionnées
+    selected_features = X_train.columns[rfecv.support_].tolist()
+    
+    print(f" RFE completed")
+    print(f"  Optimal number of features: {rfecv.n_features_}")
+    print(f"  Selected features: {selected_features}")
+    
+    # Plot CV scores vs number of features
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.plot(range(1, len(rfecv.cv_results_['mean_test_score']) + 1),
+            rfecv.cv_results_['mean_test_score'],
+            marker='o',
+            linewidth=2,
+            color='steelblue')
+    ax.axvline(rfecv.n_features_, color='red', linestyle='--', linewidth=2,
+               label=f'Optimal: {rfecv.n_features_} features')
+    ax.set_xlabel('Number of Features', fontsize=12)
+    ax.set_ylabel('Cross-Validation Score (AUC)', fontsize=12)
+    ax.set_title('RFE: CV Score vs Number of Features', fontsize=14, fontweight='bold')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    
+    return selected_features, fig
+
+
+def perform_statistical_feature_selection(
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    n_features_to_select: int = 10,
+    method: str = "mutual_info",
+    output_path: Optional[str] = None
+) -> Tuple[List[str], plt.Figure]:
+    """
+    Sélection de features par méthodes statistiques.
+    
+    Args:
+        X_train: Features d'entraînement
+        y_train: Labels d'entraînement
+        n_features_to_select: Nombre de features à sélectionner
+        method: "mutual_info" (Information Mutuelle) ou "chi2" (Chi-carré)
+        output_path: Chemin pour sauvegarder la figure
+        
+    Returns:
+        Tuple (selected_features, figure)
+    """
+    from sklearn.feature_selection import SelectKBest, mutual_info_classif, chi2
+    
+    print(f"\nSélection statistique ({method}): {n_features_to_select} features...")
+    
+    # Choisir la fonction de scoring
+    if method == "mutual_info":
+        score_func = mutual_info_classif
+        method_name = "Mutual Information"
+    elif method == "chi2":
+        # Chi2 nécessite des valeurs non-négatives
+        # Normaliser pour avoir des valeurs >= 0
+        X_normalized = X_train.copy()
+        for col in X_normalized.columns:
+            X_normalized[col] = X_normalized[col] - X_normalized[col].min()
+        score_func = chi2
+        method_name = "Chi-Squared"
+    else:
+        raise ValueError(f"Unknown method: {method}")
+    
+    # Sélection
+    if method == "chi2":
+        selector = SelectKBest(score_func=score_func, k=n_features_to_select)
+        selector.fit(X_normalized, y_train)
+    else:
+        selector = SelectKBest(score_func=score_func, k=n_features_to_select)
+        selector.fit(X_train, y_train)
+    
+    # Features sélectionnées
+    selected_features = X_train.columns[selector.get_support()].tolist()
+    
+    # Scores de toutes les features
+    scores = selector.scores_
+    
+    print(f"✓ Sélection complétée")
+    print(f"  Features sélectionnées: {selected_features}")
+    
+    # Visualisation
+    fig, ax = plt.subplots(figsize=(12, 6))
+    
+    # Trier par score décroissant
+    sorted_idx = np.argsort(scores)[::-1]
+    sorted_features = [X_train.columns[i] for i in sorted_idx]
+    sorted_scores = scores[sorted_idx]
+    
+    # Couleurs: vert pour sélectionnées, bleu pour les autres
+    colors = ['green' if feat in selected_features else 'steelblue' 
+              for feat in sorted_features]
+    
+    ax.barh(range(len(sorted_features)), sorted_scores, color=colors, alpha=0.7)
+    ax.set_yticks(range(len(sorted_features)))
+    ax.set_yticklabels(sorted_features, fontsize=9)
+    ax.set_xlabel(f'{method_name} Score', fontsize=12)
+    ax.set_title(f'Feature Selection: {method_name}', fontsize=14, fontweight='bold')
+    ax.axvline(scores[sorted_idx[n_features_to_select-1]], color='red', 
+               linestyle='--', linewidth=2, label=f'Top {n_features_to_select} threshold')
+    ax.legend()
+    ax.grid(True, alpha=0.3, axis='x')
+    plt.tight_layout()
+    
+    if output_path:
+        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    
+    return selected_features, fig
+
+
+def perform_sequential_feature_selection(
+    model_class: Any,
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    X_val: pd.DataFrame,
+    y_val: pd.Series,
+    n_features_to_select: int = 10,
+    direction: str = "forward",
+    cv: int = 3,
+    **model_kwargs
+) -> Tuple[List[str], plt.Figure]:
+    """
+    Sélection séquentielle de features (Forward ou Backward Selection).
+    Méthode Wrapper qui évalue des sous-ensembles de features.
+    
+    Args:
+        model_class: Classe du modèle
+        X_train: Features d'entraînement
+        y_train: Labels d'entraînement
+        X_val: Features de validation
+        y_val: Labels de validation
+        n_features_to_select: Nombre de features à sélectionner
+        direction: "forward" (ajoute progressivement) ou "backward" (retire progressivement)
+        cv: Nombre de folds pour la cross-validation
+        **model_kwargs: Paramètres du modèle
+        
+    Returns:
+        Tuple (selected_features, figure)
+    """
+    from sklearn.feature_selection import SequentialFeatureSelector
+    
+    print(f"\nSequential Feature Selection ({direction}): {n_features_to_select} features...")
+    
+    estimator = model_class(**model_kwargs)
+    
+    sfs = SequentialFeatureSelector(
+        estimator=estimator,
+        n_features_to_select=n_features_to_select,
+        direction=direction,
+        scoring='roc_auc',
+        cv=cv,
+        n_jobs=-1
+    )
+    
+    sfs.fit(X_train, y_train)
+    
+    selected_features = X_train.columns[sfs.get_support()].tolist()
+    
+    print(f"SFS completed")
+    print(f"Selected features: {selected_features}")
+    
+    # Évaluer la performance progressive
+    scores = []
+    n_features_range = range(1, len(X_train.columns) + 1) if direction == "forward" else range(len(X_train.columns), 0, -1)
+    
+    # Simuler l'ajout/retrait progressif (approximation pour visualisation)
+    feature_names = []
+    for n in list(n_features_range)[:15]:  # Limiter à 15 pour la vitesse
+        if n <= len(selected_features):
+            temp_features = selected_features[:n]
+            estimator_temp = model_class(**model_kwargs)
+            estimator_temp.fit(X_train[temp_features], y_train)
+            score = roc_auc_score(y_val, estimator_temp.predict_proba(X_val[temp_features])[:, 1])
+            scores.append(score)
+            feature_names.append(n)
+    
+    # Visualisation
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.plot(feature_names, scores, marker='o', linewidth=2, color='green')
+    ax.axvline(n_features_to_select, color='red', linestyle='--', linewidth=2,
+               label=f'Selected: {n_features_to_select} features')
+    ax.set_xlabel('Number of Features', fontsize=12)
+    ax.set_ylabel('Validation AUC', fontsize=12)
+    ax.set_title(f'Sequential Feature Selection ({direction.capitalize()})', 
+                 fontsize=14, fontweight='bold')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    
+    return selected_features, fig
+
+
+def perform_l1_regularization_selection(
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    X_val: pd.DataFrame,
+    y_val: pd.Series,
+    n_features_to_select: int = 10,
+    output_path: Optional[str] = None
+) -> Tuple[List[str], plt.Figure]:
+    """
+    Sélection de features par régularisation L1 (Lasso).
+    Méthode embarquée qui sélectionne via pénalisation.
+    
+    Args:
+        X_train: Features d'entraînement
+        y_train: Labels d'entraînement
+        X_val: Features de validation
+        y_val: Labels de validation
+        n_features_to_select: Nombre de features à sélectionner
+        output_path: Chemin pour sauvegarder la figure
+        
+    Returns:
+        Tuple (selected_features, figure)
+    """
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.preprocessing import StandardScaler
+    
+    print(f"\nL1 Regularization Selection: {n_features_to_select} features...")
+    
+    # Standardiser (nécessaire pour L1)
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_val_scaled = scaler.transform(X_val)
+    
+    # Tester différentes valeurs de C (inverse de la régularisation)
+    C_values = np.logspace(-3, 2, 50)
+    n_features_per_C = []
+    auc_scores = []
+    
+    for C in C_values:
+        model = LogisticRegression(
+            penalty='l1',
+            C=C,
+            solver='liblinear',
+            random_state=42,
+            max_iter=1000
+        )
+        model.fit(X_train_scaled, y_train)
+        
+        # Nombre de features non-nulles
+        n_features = np.sum(model.coef_ != 0)
+        n_features_per_C.append(n_features)
+        
+        # Score AUC
+        if n_features > 0:
+            auc = roc_auc_score(y_val, model.predict_proba(X_val_scaled)[:, 1])
+        else:
+            auc = 0.5
+        auc_scores.append(auc)
+    
+    # Trouver le C qui donne environ n_features_to_select
+    closest_idx = np.argmin(np.abs(np.array(n_features_per_C) - n_features_to_select))
+    optimal_C = C_values[closest_idx]
+    
+    # Entraîner avec le C optimal
+    model_final = LogisticRegression(
+        penalty='l1',
+        C=optimal_C,
+        solver='liblinear',
+        random_state=42,
+        max_iter=1000
+    )
+    model_final.fit(X_train_scaled, y_train)
+    
+    # Features sélectionnées
+    selected_mask = model_final.coef_[0] != 0
+    selected_features = X_train.columns[selected_mask].tolist()
+    
+    print(f"  L1 Selection completed")
+    print(f"  Optimal C: {optimal_C:.4f}")
+    print(f"  Features sélectionnées ({len(selected_features)}): {selected_features}")
+    
+    # Visualisation
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+    
+    # Plot 1: Nombre de features vs C
+    ax1.semilogx(C_values, n_features_per_C, 'b-', linewidth=2)
+    ax1.axhline(n_features_to_select, color='red', linestyle='--', linewidth=2,
+                label=f'Target: {n_features_to_select} features')
+    ax1.axvline(optimal_C, color='green', linestyle='--', linewidth=2,
+                label=f'Optimal C: {optimal_C:.4f}')
+    ax1.set_xlabel('C (Inverse of Regularization)', fontsize=12)
+    ax1.set_ylabel('Number of Non-Zero Features', fontsize=12)
+    ax1.set_title('L1 Regularization: Feature Sparsity', fontsize=12, fontweight='bold')
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+    
+    # Plot 2: AUC vs Nombre de features
+    ax2.plot(n_features_per_C, auc_scores, 'g-', linewidth=2)
+    ax2.axvline(n_features_per_C[closest_idx], color='red', linestyle='--', linewidth=2,
+                label=f'Selected: {len(selected_features)} features')
+    ax2.set_xlabel('Number of Features', fontsize=12)
+    ax2.set_ylabel('Validation AUC', fontsize=12)
+    ax2.set_title('Performance vs Model Complexity', fontsize=12, fontweight='bold')
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    
+    if output_path:
+        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    
+    return selected_features, fig
+
+
+def compare_feature_selection_methods(
+    model_class: Any,
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    X_val: pd.DataFrame,
+    y_val: pd.Series,
+    n_features: int = 10,
+    output_dir: Optional[str] = None,
+    **model_kwargs
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Compare toutes les méthodes de sélection de features.
+    
+    Args:
+        model_class: Classe du modèle (ex: xgb.XGBClassifier)
+        X_train, y_train: Données d'entraînement
+        X_val, y_val: Données de validation
+        n_features: Nombre de features à sélectionner
+        output_dir: Dossier pour sauvegarder les figures
+        **model_kwargs: Paramètres du modèle
+        
+    Returns:
+        Dict contenant les résultats de chaque méthode
+    """
+    from sklearn.preprocessing import StandardScaler
+    
+    print("\n" + "="*80)
+    print("COMPARAISON DES MÉTHODES DE SÉLECTION DE FEATURES")
+    print("="*80)
+    
+    results = {}
+    
+    if output_dir:
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # 1. Feature Importance (Embarquée - XGBoost)
+    print("\n MÉTHODE EMBARQUÉE: Feature Importance XGBoost")
+    model_temp = model_class(**model_kwargs)
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_val_scaled = scaler.transform(X_val)
+    model_temp.fit(X_train_scaled, y_train)
+    
+    importances = model_temp.feature_importances_
+    top_indices = np.argsort(importances)[::-1][:n_features]
+    features_importance = X_train.columns[top_indices].tolist()
+    
+    X_val_subset = X_val_scaled[:, top_indices]
+    auc_importance = roc_auc_score(y_val, model_temp.predict_proba(X_val_scaled)[:, 1])
+    
+    results['Feature Importance'] = {
+        'features': features_importance,
+        'n_features': len(features_importance),
+        'auc': auc_importance,
+        'method_type': 'Embarquée'
+    }
+    
+    # 2. Mutual Information (Statistique)
+    print("\n MÉTHODE STATISTIQUE: Mutual Information")
+    features_mi, _ = perform_statistical_feature_selection(
+        X_train, y_train, n_features_to_select=n_features, method="mutual_info",
+        output_path=str(output_dir / "q3_statistical_mutual_info.png") if output_dir else None
+    )
+    
+    # Évaluer
+    model_mi = model_class(**model_kwargs)
+    X_train_mi = scaler.fit_transform(X_train[features_mi])
+    X_val_mi = scaler.transform(X_val[features_mi])
+    model_mi.fit(X_train_mi, y_train)
+    auc_mi = roc_auc_score(y_val, model_mi.predict_proba(X_val_mi)[:, 1])
+    
+    results['Mutual Information'] = {
+        'features': features_mi,
+        'n_features': len(features_mi),
+        'auc': auc_mi,
+        'method_type': 'Statistique'
+    }
+    
+    # 3. RFE (Wrapper)
+    print("\n MÉTHODE WRAPPER: Recursive Feature Elimination")
+    features_rfe, _ = perform_recursive_feature_elimination(
+        model_class, X_train, y_train, X_val, y_val,
+        n_features_to_select=n_features, cv=3, **model_kwargs
+    )
+    
+    X_train_rfe = scaler.fit_transform(X_train[features_rfe])
+    X_val_rfe = scaler.transform(X_val[features_rfe])
+    model_rfe = model_class(**model_kwargs)
+    model_rfe.fit(X_train_rfe, y_train)
+    auc_rfe = roc_auc_score(y_val, model_rfe.predict_proba(X_val_rfe)[:, 1])
+    
+    results['RFE'] = {
+        'features': features_rfe,
+        'n_features': len(features_rfe),
+        'auc': auc_rfe,
+        'method_type': 'Wrapper'
+    }
+    
+    # 4. L1 Regularization (Embarquée)
+    print("\n MÉTHODE EMBARQUÉE: L1 Regularization")
+    features_l1, _ = perform_l1_regularization_selection(
+        X_train, y_train, X_val, y_val, n_features_to_select=n_features,
+        output_path=str(output_dir / "q3_l1_regularization.png") if output_dir else None
+    )
+    
+    X_train_l1 = scaler.fit_transform(X_train[features_l1])
+    X_val_l1 = scaler.transform(X_val[features_l1])
+    model_l1 = model_class(**model_kwargs)
+    model_l1.fit(X_train_l1, y_train)
+    auc_l1 = roc_auc_score(y_val, model_l1.predict_proba(X_val_l1)[:, 1])
+    
+    results['L1 Regularization'] = {
+        'features': features_l1,
+        'n_features': len(features_l1),
+        'auc': auc_l1,
+        'method_type': 'Embarquée'
+    }
+    
+    # Comparaison visuelle
+    print("\n" + "="*80)
+    print("RÉSUMÉ COMPARATIF")
+    print("="*80)
+    
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+    
+    # Plot 1: AUC par méthode
+    methods = list(results.keys())
+    aucs = [results[m]['auc'] for m in methods]
+    colors_map = {'Embarquée': 'steelblue', 'Wrapper': 'green', 
+              'Statistique': 'orange', 'Interprétabilité': 'purple'}
+    bar_colors = [colors_map[results[m]['method_type']] for m in methods]
+    
+    ax1.barh(methods, aucs, color=bar_colors, alpha=0.7)
+    ax1.set_xlabel('Validation AUC', fontsize=12)
+    ax1.set_title('Performance par Méthode de Sélection', fontsize=14, fontweight='bold')
+    ax1.grid(True, alpha=0.3, axis='x')
+    
+    # Ajouter les valeurs
+    for i, (method, auc) in enumerate(zip(methods, aucs)):
+        ax1.text(auc + 0.001, i, f'{auc:.4f}', va='center', fontsize=10)
+    
+    # Plot 2: Chevauchement des features
+    all_features_sets = [set(results[m]['features']) for m in methods]
+    
+    # Compter les chevauchements
+    overlap_matrix = np.zeros((len(methods), len(methods)))
+    for i, set_i in enumerate(all_features_sets):
+        for j, set_j in enumerate(all_features_sets):
+            overlap_matrix[i, j] = len(set_i & set_j)
+    
+    im = ax2.imshow(overlap_matrix, cmap='YlGn', aspect='auto')
+    ax2.set_xticks(range(len(methods)))
+    ax2.set_yticks(range(len(methods)))
+    ax2.set_xticklabels(methods, rotation=45, ha='right', fontsize=10)
+    ax2.set_yticklabels(methods, fontsize=10)
+    ax2.set_title('Chevauchement des Features Sélectionnées', fontsize=14, fontweight='bold')
+    
+    # Ajouter les valeurs dans les cellules
+    for i in range(len(methods)):
+        for j in range(len(methods)):
+            text = ax2.text(j, i, int(overlap_matrix[i, j]),
+                          ha="center", va="center", color="black", fontsize=10)
+    
+    plt.colorbar(im, ax=ax2, label='Nombre de features en commun')
+    
+    plt.tight_layout()
+    if output_dir:
+        plt.savefig(output_dir / "q3_methods_comparison.png", dpi=150, bbox_inches='tight')
+    plt.show()
+    
+    # Afficher le tableau récapitulatif
+    print(f"\n{'Méthode':<25} {'Type':<15} {'AUC':<10} {'Features'}")
+    print("-" * 80)
+    for method, data in results.items():
+        print(f"{method:<25} {data['method_type']:<15} {data['auc']:<10.4f} {data['n_features']}")
+    
+    # Features communes
+    common_features = set.intersection(*all_features_sets)
+    if common_features:
+        print(f"\n Features communes à TOUTES les méthodes ({len(common_features)}):")
+        for feat in common_features:
+            print(f"  - {feat}")
+    else:
+        print("\n Aucune feature commune à toutes les méthodes")
+    
+    # Recommandation
+    best_method = max(results.items(), key=lambda x: x[1]['auc'])
+    print(f"\n RECOMMANDATION: '{best_method[0]}' (AUC = {best_method[1]['auc']:.4f})")
+    
+    return results
