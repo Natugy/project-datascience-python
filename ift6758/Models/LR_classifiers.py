@@ -18,7 +18,7 @@ from matplotlib.backends.backend_pdf import PdfPages
 
 # chemin absolu de la racine du projet
 current_file = Path(__file__).absolute()
-project_root = current_file.parent.parent.parent.parent  # Remonte 4 niveaux
+project_root = current_file.parent.parent.parent  # Remonte 3 niveaux
 sys.path.insert(0, str(project_root))
 
 from ift6758.data.pandas_conversion import get_dataframe_from_data
