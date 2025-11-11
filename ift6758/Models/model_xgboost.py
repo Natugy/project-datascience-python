@@ -26,9 +26,9 @@ class XGBoostModelTrainer:
     
     def __init__(
         self,
-        project_name: str = "ift6758-milestone2",
+        project_name: str = "IFT6758-2025",
         experiment_name: str = "xgboost-baseline",
-        wandb_entity: Optional[str] = "IFT6758.2025-A04",
+        wandb_entity: Optional[str] = "IFT6758-2025-A04",
         use_scaler: bool = True,
     ):
         """
