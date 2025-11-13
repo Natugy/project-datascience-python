@@ -542,125 +542,112 @@ class XGBoostModelTrainer:
         return model, scaler
 
 
+from pathlib import Path
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.metrics import roc_curve, auc
+from sklearn.calibration import calibration_curve
+
+
 def generate_evaluation_plots(
-    models_dict: Dict[str, Tuple[Any, str]],
-    X_val: pd.DataFrame,
-    y_val: pd.Series,
+    models_dict,
+    X_val,
+    y_val,
     output_dir: str = "./figures/milestone2"
 ):
     """
-    Génère les 4 figures d'évaluation requises.
-    
-    Args:
-        models_dict: Dict {nom_modèle: (modèle, features ou None si toutes)}
-        X_val: Features de validation
-        y_val: Labels de validation
-        output_dir: Dossier de sortie
+    Génère les 4 figures d'évaluation requises avec corrections de logique.
     """
+
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Préparer les données pour chaque modèle
+
+    # Préparer les prédictions
     predictions = {}
     for name, (model, features) in models_dict.items():
-        if features:
-            X_subset = X_val[features]
-        else:
-            X_subset = X_val
+        X_subset = X_val[features].copy() if features else X_val.copy()
         predictions[name] = model.predict_proba(X_subset)[:, 1]
-    
+
     # 1. ROC Curve
     fig, ax = plt.subplots(figsize=(10, 8))
     for name, y_pred_proba in predictions.items():
         fpr, tpr, _ = roc_curve(y_val, y_pred_proba)
         roc_auc = auc(fpr, tpr)
-        ax.plot(fpr, tpr, label=f'{name} (AUC = {roc_auc:.3f})', linewidth=2)
-    
-    ax.plot([0, 1], [0, 1], 'k--', label='Random', linewidth=1)
-    ax.set_xlabel('False Positive Rate', fontsize=12)
-    ax.set_ylabel('True Positive Rate', fontsize=12)
-    ax.set_title('ROC Curves - XGBoost Models', fontsize=14, fontweight='bold')
-    ax.legend(loc='lower right', fontsize=10)
+        ax.plot(fpr, tpr, label=f"{name} (AUC = {roc_auc:.3f})", linewidth=2)
+
+    ax.plot([0, 1], [0, 1], "k--", label="Random", linewidth=1)
+    ax.set_xlabel("False Positive Rate", fontsize=12)
+    ax.set_ylabel("True Positive Rate", fontsize=12)
+    ax.set_title("ROC Curves - XGBoost Models", fontsize=14, fontweight="bold")
+    ax.legend(loc="lower right", fontsize=10)
     ax.grid(True, alpha=0.3)
     plt.tight_layout()
-    plt.savefig(output_dir / 'xgboost_roc_curves.png', dpi=150, bbox_inches='tight')
+    plt.savefig(output_dir / "xgboost_roc_curves.png", dpi=150, bbox_inches="tight")
     plt.close()
-    
+
     # 2. Goal Rate vs Probability Percentile
     fig, ax = plt.subplots(figsize=(10, 8))
-    percentiles = np.linspace(0, 100, 21)
-    
+    n_bins = 20
     for name, y_pred_proba in predictions.items():
-        goal_rates = []
-        for p in percentiles:
-            threshold = np.percentile(y_pred_proba, p)
-            mask = y_pred_proba >= threshold
-            if mask.sum() > 0:
-                goal_rate = y_val[mask].mean()
-                goal_rates.append(goal_rate * 100)
-            else:
-                goal_rates.append(0)
-        ax.plot(percentiles, goal_rates, marker='o', label=name, linewidth=2)
-    
-    ax.set_xlabel('Shot Probability Percentile', fontsize=12)
-    ax.set_ylabel('Goal Rate (%)', fontsize=12)
-    ax.set_title('Goal Rate vs Probability Percentile', fontsize=14, fontweight='bold')
+        df = pd.DataFrame({"prob": y_pred_proba, "goal": y_val})
+        df["bin"] = pd.qcut(df["prob"], q=n_bins, duplicates="drop")
+        mean_rates = df.groupby("bin", observed=True)["goal"].mean() * 100
+        percentiles = np.linspace(0, 100, len(mean_rates))
+        ax.plot(percentiles, mean_rates, marker="o", label=name, linewidth=2)
+
+    ax.set_xlabel("Shot Probability Percentile", fontsize=12)
+    ax.set_ylabel("Goal Rate (%)", fontsize=12)
+    ax.set_title("Goal Rate vs Probability Percentile", fontsize=14, fontweight="bold")
     ax.legend(fontsize=10)
     ax.grid(True, alpha=0.3)
     plt.tight_layout()
-    plt.savefig(output_dir / 'xgboost_goal_rate_percentile.png', dpi=150, bbox_inches='tight')
+    plt.savefig(output_dir / "xgboost_goal_rate_percentile.png", dpi=150, bbox_inches="tight")
     plt.close()
-    
-    # 3. Cumulative Proportion of Goals vs Percentile
+
+    # 3. Cumulative Proportion of Goals vs Probability Percentile
     fig, ax = plt.subplots(figsize=(10, 8))
-    
     for name, y_pred_proba in predictions.items():
-        # Trier par probabilité décroissante
-        sorted_indices = np.argsort(y_pred_proba)[::-1]
-        y_sorted = y_val.iloc[sorted_indices].values
-        
-        # Proportion cumulée
+        sorted_idx = np.argsort(y_pred_proba)[::-1]
+        y_sorted = y_val.iloc[sorted_idx].values
+        total_goals = np.sum(y_sorted)
+        if total_goals == 0:
+            continue
         cumsum = np.cumsum(y_sorted)
-        cumsum_prop = cumsum / cumsum[-1] * 100
-        
-        # Percentiles
+        cumsum_prop = cumsum / total_goals * 100
         n = len(y_sorted)
         percentiles_cum = np.arange(1, n + 1) / n * 100
-        
         ax.plot(percentiles_cum, cumsum_prop, label=name, linewidth=2)
-    
-    ax.plot([0, 100], [0, 100], 'k--', label='Perfect', linewidth=1)
-    ax.set_xlabel('Percentile of Shots', fontsize=12)
-    ax.set_ylabel('Cumulative Proportion of Goals (%)', fontsize=12)
-    ax.set_title('Cumulative % of Goals vs Shot Probability Percentile', fontsize=14, fontweight='bold')
+
+    ax.plot([0, 100], [0, 100], "k--", label="Perfect", linewidth=1)
+    ax.set_xlabel("Percentile of Shots", fontsize=12)
+    ax.set_ylabel("Cumulative Proportion of Goals (%)", fontsize=12)
+    ax.set_title("Cumulative % of Goals vs Shot Probability Percentile",
+                 fontsize=14, fontweight="bold")
     ax.legend(fontsize=10)
     ax.grid(True, alpha=0.3)
     plt.tight_layout()
-    plt.savefig(output_dir / 'xgboost_cumulative_goals.png', dpi=150, bbox_inches='tight')
+    plt.savefig(output_dir / "xgboost_cumulative_goals.png", dpi=150, bbox_inches="tight")
     plt.close()
-    
+
     # 4. Calibration Curve (Reliability Diagram)
     fig, ax = plt.subplots(figsize=(10, 8))
-    
     for name, y_pred_proba in predictions.items():
         prob_true, prob_pred = calibration_curve(
-            y_val,
-            y_pred_proba,
-            n_bins=10,
-            strategy='uniform'
+            y_val, y_pred_proba, n_bins=10, strategy="quantile"
         )
-        ax.plot(prob_pred, prob_true, marker='o', label=name, linewidth=2)
-    
-    ax.plot([0, 1], [0, 1], 'k--', label='Perfectly calibrated', linewidth=1)
-    ax.set_xlabel('Mean Predicted Probability', fontsize=12)
-    ax.set_ylabel('Fraction of Positives', fontsize=12)
-    ax.set_title('Calibration Curves (Reliability Diagram)', fontsize=14, fontweight='bold')
+        ax.plot(prob_pred, prob_true, marker="o", label=name, linewidth=2)
+
+    ax.plot([0, 1], [0, 1], "k--", label="Perfectly calibrated", linewidth=1)
+    ax.set_xlabel("Mean Predicted Probability", fontsize=12)
+    ax.set_ylabel("Fraction of Positives", fontsize=12)
+    ax.set_title("Calibration Curves (Reliability Diagram)", fontsize=14, fontweight="bold")
     ax.legend(fontsize=10)
     ax.grid(True, alpha=0.3)
     plt.tight_layout()
-    plt.savefig(output_dir / 'xgboost_calibration_curves.png', dpi=150, bbox_inches='tight')
+    plt.savefig(output_dir / "xgboost_calibration_curves.png", dpi=150, bbox_inches="tight")
     plt.close()
-    
+
     print(f"\nAll evaluation plots saved to {output_dir}")
 
 
