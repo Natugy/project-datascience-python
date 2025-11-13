@@ -178,6 +178,33 @@ def _calculate_powerplay_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def detect_empty_net_from_situation(df):
+    """
+    Determine empty-net goals using decoded goalie presence.
+    - opponent_goalie == 0 → empty net available
+    - friendly_goalie == 0 → shooter's own goalie pulled (NOT empty net)
+    """
+
+    # Fallback: derive goalie flags from situationCode if missing
+    if ("opponent_goalie" not in df.columns or "friendly_goalie" not in df.columns) and "situationCode" in df.columns:
+        def _decode_goalies(code):
+            code = str(code) if pd.notna(code) else ""
+            if len(code) == 4 and code.isdigit():
+                A = int(code[0]); D = int(code[3])
+                return A, D
+            return 1, 1
+        tmp = df["situationCode"].apply(_decode_goalies)
+        df["friendly_goalie"]  = tmp.apply(lambda x: x[0])
+        df["opponent_goalie"]  = tmp.apply(lambda x: x[1])
+
+    if "opponent_goalie" not in df.columns or "friendly_goalie" not in df.columns:
+        raise ValueError("Goalie decoding columns missing. Re-run pandas_conversion.py.")
+
+    df["empty_net"] = 0
+    df.loc[df["opponent_goalie"] == 0, "empty_net"] = 1
+    df.loc[df["friendly_goalie"] == 0, "empty_net"] = 0
+    return df
+
 def clean_dataframe(begin: int, end: int) -> pd.DataFrame:
     """
     Charge et nettoie les données d'une plage de saisons.
@@ -214,7 +241,7 @@ def clean_dataframe(begin: int, end: int) -> pd.DataFrame:
     logger.info(f"  {len(df)} tirs/buts retenus ({df['is_goal'].sum()} buts)")
     
     # === Feature: Empty net ===
-    df["empty_net"] = df.get("emptyNet", pd.Series(0, index=df.index)).fillna(0).astype(int)
+    df = detect_empty_net_from_situation(df) 
     
     # === Features géométriques: distance et angle au filet ===
     logger.info("Calcul de distance_net et angle_net...")
@@ -479,3 +506,29 @@ def main():
 if __name__ == "__main__":
     main()
 
+def generate_playoff_test_data(begin: int = 2020, end: int = 2021, output_dir: str = None):
+    """
+    Génère un dataset de tests pour les séries éliminatoires (2020–2021).
+    """
+    from pathlib import Path
+    import pandas as pd
+
+    if output_dir is None:
+        project_root = Path(__file__).parent.parent.parent
+        output_dir = project_root / "data" / "processed"
+    else:
+        output_dir = Path(output_dir)
+    
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Charger les saisons 2020–2021
+    df_all = clean_dataframe(begin, end)
+    
+    # Filtrer les matchs de séries (gameId commence par ...03)
+    df_playoffs = df_all[df_all['idGame'].astype(str).str[4:6] == "03"].copy()
+    
+    save_path = output_dir / "test_playoffs.csv"
+    df_playoffs.to_csv(save_path, index=False)
+    
+    print(f"Playoff dataset sauvegardé ({len(df_playoffs)} tirs) → {save_path}")
+    return df_playoffs

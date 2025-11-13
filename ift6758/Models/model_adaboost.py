@@ -28,7 +28,6 @@ from sklearn.metrics import (
     accuracy_score, precision_score, recall_score,
     f1_score, roc_auc_score, roc_curve
 )
-from sklearn.calibration import CalibrationDisplay
 
 # WandB
 import wandb
@@ -43,6 +42,16 @@ from sklearn.ensemble import AdaBoostClassifier
 
 # For hyperparameter tuning
 from sklearn.model_selection import RandomizedSearchCV
+
+# import feature selection utilities
+from ift6758.models.model_xgboost import (
+    perform_statistical_feature_selection,
+    perform_recursive_feature_elimination,
+    perform_l1_regularization_selection,
+    perform_sequential_feature_selection
+)
+
+from sklearn.preprocessing import StandardScaler
 
 #%%
 # Configuration des chemins
@@ -88,7 +97,7 @@ ada = AdaBoostClassifier(
 #%%
 # 2. Hyperparameter Search Grid
 param_grid = {
-    "n_estimators": [200, 300, 400, 500],
+    "n_estimators": [100, 200, 300],
     "learning_rate": [0.01, 0.05, 0.1, 0.2],
     "estimator__max_depth": [1, 2, 3],
     "estimator__min_samples_split": [2, 5, 10],
@@ -142,7 +151,7 @@ for k, v in metrics.items():
 wandb.log(metrics)
 
 #%%
-# 5. Log evaluation plots (ROC, calibration, cumulative gain, goal-rate curve)
+# 5. Log evaluation plots
 fig_adaboost = afficher_graphiques_metrics(y_val, y_scores, "AdaBoost_Tuned")
 wandb.log({"evaluation_plots": wandb.Image(fig_adaboost)})
 
@@ -168,36 +177,93 @@ wandb.log({"feature_importances_plot": wandb.Image(plt)})
 plt.close()
 
 #%%
-# 7. Feature Selection  
-# Keep top-k important features (example: top 10)
+# integrate XGBoost-style feature selection methods
+print("\n===== FEATURE SELECTION (XGBoost METHODS ADAPTED FOR ADABOOST) =====")
+
 TOP_K = 10
-selected_features = fi_df.head(TOP_K)["feature"].tolist()
 
-print("\nSelected Features:")
-print(selected_features)
+# scale once for all selection methods
+scaler = StandardScaler()
+X_train_scaled = pd.DataFrame(scaler.fit_transform(X_train), columns=X_train.columns)
+X_val_scaled = pd.DataFrame(scaler.transform(X_val), columns=X_val.columns)
 
-wandb.log({"selected_features": selected_features})
+# ---- Mutual Information ----
+features_mi, _ = perform_statistical_feature_selection(
+    X_train_scaled, y_train,
+    n_features_to_select=TOP_K,
+    method="mutual_info",
+    output_path=str(FIGURES_DIR / "adaboost_mi.png")
+)
 
-# Train model using only selected features
-best_ada_reduced = best_ada
-best_ada_reduced.fit(X_train[selected_features], y_train)
+# ---- RFE ----
+features_rfe, _ = perform_recursive_feature_elimination(
+    model_class=AdaBoostClassifier,
+    X_train=X_train_scaled, y_train=y_train,
+    X_val=X_val_scaled, y_val=y_val,
+    n_features_to_select=TOP_K,
+    estimator=DecisionTreeClassifier(max_depth=2)
+)
 
-y_scores_reduced = best_ada_reduced.predict_proba(X_val[selected_features])[:, 1]
-y_pred_reduced = (y_scores_reduced >= 0.5).astype(int)
+# ---- L1 Regularization ----
+features_l1, _ = perform_l1_regularization_selection(
+    X_train_scaled, y_train, X_val_scaled, y_val,
+    n_features_to_select=TOP_K,
+    output_path=str(FIGURES_DIR / "adaboost_l1.png")
+)
 
-metrics_reduced = {
-    "reduced_AUC": roc_auc_score(y_val, y_scores_reduced),
-    "reduced_Accuracy": accuracy_score(y_val, y_pred_reduced),
-    "reduced_Precision": precision_score(y_val, y_pred_reduced, zero_division=0),
-    "reduced_Recall": recall_score(y_val, y_pred_reduced, zero_division=0),
-    "reduced_F1": f1_score(y_val, y_pred_reduced, zero_division=0)
+# ---- Sequential Forward Selection ----
+features_sfs, _ = perform_sequential_feature_selection(
+    model_class=AdaBoostClassifier,
+    X_train=X_train_scaled, y_train=y_train,
+    X_val=X_val_scaled, y_val=y_val,
+    n_features_to_select=TOP_K,
+    direction="forward",
+    estimator=DecisionTreeClassifier(max_depth=2)
+)
+
+# ---- AdaBoost own importances (original) ----
+features_importance = fi_df.head(TOP_K)["feature"].tolist()
+
+all_fs = {
+    "importance": features_importance,
+    "mutual_info": features_mi,
+    "rfe": features_rfe,
+    "l1_regularization": features_l1,
+    "sfs_forward": features_sfs
 }
 
-print("\nMetrics (Reduced Features):")
-for k, v in metrics_reduced.items():
-    print(f"{k}: {v:.4f}")
+wandb.log({"feature_selection_sets": all_fs})
 
-wandb.log(metrics_reduced)
+print("\nSelected features by method:")
+for k, v in all_fs.items():
+    print(f"{k}: {v}")
+
+#%%
+# Train models on each feature subset
+def evaluate_subset(label, feat_list):
+    best_ada.fit(X_train[feat_list], y_train)
+    p = best_ada.predict_proba(X_val[feat_list])[:, 1]
+    preds = (p >= 0.5).astype(int)
+
+    m = {
+        f"{label}_AUC": roc_auc_score(y_val, p),
+        f"{label}_Accuracy": accuracy_score(y_val, preds),
+        f"{label}_Precision": precision_score(y_val, preds, zero_division=0),
+        f"{label}_Recall": recall_score(y_val, preds, zero_division=0),
+        f"{label}_F1": f1_score(y_val, preds, zero_division=0),
+    }
+    wandb.log(m)
+    return m
+
+metrics_all = {}
+for key, feats in all_fs.items():
+    metrics_all[key] = evaluate_subset(f"AdaBoost_{key}", feats)
+
+best_method = max(metrics_all, key=lambda k: metrics_all[k][f"AdaBoost_{k}_AUC"])
+best_feats = all_fs[best_method]
+
+best_ada.fit(X_train[best_feats], y_train)
+joblib.dump(best_ada, f"adaboost_best_{best_method}.pkl")
 
 #%%
 # 8. Save Model + W&B Artifact

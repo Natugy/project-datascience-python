@@ -7,7 +7,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.metrics import (roc_auc_score, accuracy_score, precision_score, 
                              recall_score, f1_score, confusion_matrix)
-from typing import Dict, Any
+from typing import Dict, Any, Optional, List, Tuple
 
 
 def evaluate_model(model, X, y, features=None, model_name="Model"):
@@ -562,3 +562,61 @@ def compare_models_detailed(
         plt.savefig(save_path, dpi=150, bbox_inches='tight')
     
     return df, fig
+
+def load_and_prepare_playoff_data(
+    playoff_path: Optional[str] = None,
+    target_col: str = "is_goal",
+    exclude_cols: Optional[List[str]] = None
+) -> Tuple[pd.DataFrame, pd.Series]:
+    """
+    Charge et prépare le dataset de tests pour les séries éliminatoires (2020–2021).
+    
+    Args:
+        playoff_path: Chemin vers le fichier CSV des données de playoffs (défaut: data/processed/test_playoffs.csv)
+        target_col: Nom de la colonne cible (par défaut: "is_goal")
+        exclude_cols: Colonnes à exclure des features (métadonnées, cibles, etc.)
+    
+    Returns:
+        Tuple (X_playoffs, y_playoffs)
+    """
+    import pandas as pd
+    from pathlib import Path
+    
+    # Déterminer le chemin par défaut
+    if playoff_path is None:
+        project_root = Path(__file__).parent.parent.parent
+        playoff_path = project_root / "data" / "processed" / "test_playoffs.csv"
+    
+    if not Path(playoff_path).exists():
+        raise FileNotFoundError(f"Le fichier {playoff_path} est introuvable. "
+                                "Générez-le d'abord via feature_engineering.clean_dataframe(2020, 2021) "
+                                "en filtrant les séries éliminatoires.")
+    
+    # Charger les données
+    df = pd.read_csv(playoff_path)
+    
+    # Colonnes à exclure
+    if exclude_cols is None:
+        exclude_cols = [target_col, "season", "teamAbbr", "idGame", "prev_event", "prev_team"]
+    
+    # Identifier les colonnes de features
+    all_features = [col for col in df.columns if col not in exclude_cols]
+    
+    # One-hot encode les colonnes catégorielles (e.g. shot_type)
+    categorical_cols = [col for col in all_features if df[col].dtype == 'object']
+    for col in categorical_cols:
+        dummies = pd.get_dummies(df[col], prefix=col, drop_first=True)
+        df = pd.concat([df, dummies], axis=1)
+    all_features = [col for col in df.columns if col not in exclude_cols + categorical_cols]
+    
+    # Remplacer les NaN
+    df[all_features] = df[all_features].fillna(0)
+    
+    X_playoffs = df[all_features]
+    y_playoffs = df[target_col]
+    
+    print(f"Données des playoffs chargées!")
+    print(f"  Total: {X_playoffs.shape[0]:,} tirs | {len(all_features)} features | "
+          f"Taux de buts: {y_playoffs.mean():.2%}")
+    
+    return X_playoffs, y_playoffs
