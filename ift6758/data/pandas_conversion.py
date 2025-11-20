@@ -40,12 +40,43 @@ def get_playerName_from_game(game_players_data: pd.DataFrame, player_id) -> Opti
     return f"{first_name} {last_name}"
 
 
+
 # Colonnes standardisées pour tous les types d'événements
 STANDARD_COLUMNS = [
     'teamId', 'period', 'timeInPeriod', 'shotType', 'xCoord', 'yCoord',
-    'shooterId', 'shooterName', 'goalieId', 'goalieName', 'typeDescKey', 'zoneCode'
+    'shooterId', 'shooterName', 'goalieId', 'goalieName', 'typeDescKey', 'zoneCode',
+    'situationCode', 'friendly_skaters', 'opponent_skaters',
+    'friendly_goalie', 'opponent_goalie'
 ]
 
+def decode_situation_code(code):
+    """
+    Decode NHL numeric situation codes like 1451, 1540, etc.
+    Returns (friendly_skaters, opponent_skaters, friendly_goalie, opponent_goalie).
+    """
+    if pd.isna(code):
+        return (5, 5, 1, 1)
+
+    code = str(int(code))  # ensure "1451" and 1451 are handled
+
+    if len(code) != 4:
+        return (5, 5, 1, 1)
+
+    # Interpretation:
+    # A = attacking goalie (1 or 0)
+    # B = attacking skaters including goalie
+    # C = defending skaters including goalie
+    # D = defending goalie (1 or 0)
+    A = int(code[0])
+    B = int(code[1])
+    C = int(code[2])
+    D = int(code[3])
+
+    # Convert: skaters excluding goalie
+    friendly_skaters = B - A
+    opponent_skaters = C - D
+
+    return friendly_skaters, opponent_skaters, A, D
 
 def _extract_event_dataframe(
     players: pd.DataFrame,
@@ -77,6 +108,38 @@ def _extract_event_dataframe(
     # Extraire les details et période
     details = pd.json_normalize(df["details"])
     period = pd.json_normalize(df['periodDescriptor'])
+
+    # --- Extract situationCode from ROOT first, then details as fallback ---
+    # In NHL JSON v2, situationCode is at the play root (e.g., "1551")
+    root_sc = df.get("situationCode")  # Series or None
+    details_sc = details.get("situationCode")  # Series or None
+    df["situationCode"] = root_sc if root_sc is not None else details_sc
+
+    # --- Decode situationCode ABCD into skater/goalie info ---
+    def _decode(code):
+        if pd.isna(code):
+            return (5, 5, 1, 1)  # default 5v5 with both goalies in
+        code = str(code)
+        if len(code) != 4 or not code.isdigit():
+            return (5, 5, 1, 1)
+        A = int(code[0])  # friendly goalie present? (1/0)
+        B = int(code[1])  # friendly skaters incl goalie
+        C = int(code[2])  # opponent skaters incl goalie
+        D = int(code[3])  # opponent goalie present? (1/0)
+        # Export non-goalie skater counts; keep goalie flags
+        return (B - A, C - D, A, D)
+
+    decoded = df["situationCode"].apply(_decode)
+    df["friendly_skaters"] = decoded.apply(lambda x: x[0])
+    df["opponent_skaters"] = decoded.apply(lambda x: x[1])
+    df["friendly_goalie"]  = decoded.apply(lambda x: x[2])
+    df["opponent_goalie"]  = decoded.apply(lambda x: x[3])
+
+    # Safety fills
+    df["friendly_skaters"] = df["friendly_skaters"].fillna(5).astype(int)
+    df["opponent_skaters"] = df["opponent_skaters"].fillna(5).astype(int)
+    df["friendly_goalie"]  = df["friendly_goalie"].fillna(1).astype(int)
+    df["opponent_goalie"]  = df["opponent_goalie"].fillna(1).astype(int)
     
     # Filtrer par type d'événement
     df = df[df["typeDescKey"].isin(event_types)].copy()
@@ -107,6 +170,11 @@ def _extract_event_dataframe(
     df["shotType"] = details.get("shotType")
     df["period"] = period.get("number")
     df["teamId"] = details.get("eventOwnerTeamId")
+
+    df["friendly_skaters"]  = df["friendly_skaters"].fillna(5).astype(int)
+    df["opponent_skaters"]  = df["opponent_skaters"].fillna(5).astype(int)
+    df["friendly_goalie"]   = df["friendly_goalie"].fillna(1).astype(int)
+    df["opponent_goalie"]   = df["opponent_goalie"].fillna(1).astype(int)
     
     return df[STANDARD_COLUMNS]
 
@@ -159,6 +227,26 @@ def get_dataframe_from_other_event(players: pd.DataFrame, plays: List[Dict]) -> 
     
     if df.empty:
         return pd.DataFrame(columns=STANDARD_COLUMNS)
+    
+    # situationCode for non-shot events 
+    root_sc = df.get("situationCode")
+    details_sc = details.get("situationCode")
+    df["situationCode"] = root_sc if root_sc is not None else details_sc
+
+    def _decode(code):
+        if pd.isna(code):
+            return (5, 5, 1, 1)
+        code = str(code)
+        if len(code) != 4 or not code.isdigit():
+            return (5, 5, 1, 1)
+        A = int(code[0]); B = int(code[1]); C = int(code[2]); D = int(code[3])
+        return (B - A, C - D, A, D)
+
+    decoded = df["situationCode"].apply(_decode)
+    df["friendly_skaters"] = decoded.apply(lambda x: x[0]).fillna(5).astype(int)
+    df["opponent_skaters"] = decoded.apply(lambda x: x[1]).fillna(5).astype(int)
+    df["friendly_goalie"]  = decoded.apply(lambda x: x[2]).fillna(1).astype(int)
+    df["opponent_goalie"]  = decoded.apply(lambda x: x[3]).fillna(1).astype(int)
     
     # Pour les autres événements, pas de données de tir
     df["xCoord"] = details.get("xCoord")

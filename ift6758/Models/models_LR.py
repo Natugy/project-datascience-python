@@ -13,6 +13,7 @@ import seaborn as sns
 from sklearn.calibration import calibration_curve, CalibrationDisplay
 import matplotlib.ticker as ticker
 import wandb
+import joblib
 
 from matplotlib.backends.backend_pdf import PdfPages
 
@@ -60,15 +61,15 @@ def create_feature_dataframe(df,feature='all'):
         return angle
 
     if feature == 'distance':
-        df['distance_to_goal'] = df.apply(calculate_distance, axis=1)
+        df['distance_net'] = df.apply(calculate_distance, axis=1)
         df['is_goal'] = df['typeDescKey'].apply(lambda x: 1 if x == 'goal' else 0)
     elif feature == 'angle':
-        df['angle_to_goal'] = df.apply(calculate_angle, axis=1)
+        df['angle_net'] = df.apply(calculate_angle, axis=1)
         df['is_goal'] = df['typeDescKey'].apply(lambda x: 1 if x == 'goal' else 0)
     elif feature == 'all':
         # Appliquer les calculs et créer le DataFrame des caractéristiques
-        df['distance_to_goal'] = df.apply(calculate_distance, axis=1)
-        df['angle_to_goal'] = df.apply(calculate_angle, axis=1)
+        df['distance_net'] = df.apply(calculate_distance, axis=1)
+        df['angle_net'] = df.apply(calculate_angle, axis=1)
         df['is_goal'] = df['typeDescKey'].apply(lambda x: 1 if x == 'goal' else 0)
         #df['is_empty_net'] = df['emptyNet'].fillna(0)
 
@@ -92,20 +93,20 @@ def create_datasets(df,feature='all'):
 
     # Séparer les caractéristiques et les étiquettes
     if feature == 'distance':
-        X_train = train_df[['distance_to_goal']]       
-        X_val = val_df[['distance_to_goal']]      
-        X_test = test_df[['distance_to_goal']]
+        X_train = train_df[['distance_net']]       
+        X_val = val_df[['distance_net']]      
+        X_test = test_df[['distance_net']]
        
     elif feature== 'angle':
-        X_train = train_df[['angle_to_goal']]       
-        X_val = val_df[['angle_to_goal']]        
-        X_test = test_df[['angle_to_goal']]
+        X_train = train_df[['angle_net']]       
+        X_val = val_df[['angle_net']]        
+        X_test = test_df[['angle_net']]
         
     elif feature == 'all':
         # avec toutes les caracteristiques : distance, angle et empty net
-        X_train = train_df[['distance_to_goal', 'angle_to_goal']]
-        X_val = val_df[['distance_to_goal', 'angle_to_goal']]      
-        X_test = test_df[['distance_to_goal', 'angle_to_goal']]
+        X_train = train_df[['distance_net', 'angle_net']]
+        X_val = val_df[['distance_net', 'angle_net']]      
+        X_test = test_df[['distance_net', 'angle_net']]
         
     y_train = train_df['is_goal']
     y_val = val_df['is_goal']
@@ -389,8 +390,30 @@ def main():
     
     print(f"PDF sauvegardé avec succès: {pdf_path}")
     print(f"Nombre de pages: {len(figures)}")
-    
-    # Fermer wandb
+
+    # === Save and log Logistic Regression models as W&B artifacts ===
+    model_dir = project_root / "ift6758" / "models_saved"
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save each trained model locally
+    joblib.dump(model_distance, model_dir / "logreg_distance.pkl")
+    joblib.dump(model_angle, model_dir / "logreg_angle.pkl")
+    joblib.dump(model_all, model_dir / "logreg_distance_angle.pkl")
+
+    print(f"Models saved locally in: {model_dir}")
+
+    # Log each model to W&B as artifacts
+    for name, filename in [
+        ("logreg-distance", "logreg_distance.pkl"),
+        ("logreg-angle", "logreg_angle.pkl"),
+        ("logreg-distance-angle", "logreg_distance_angle.pkl")
+    ]:
+        artifact = wandb.Artifact(name, type="model")
+        artifact.add_file(str(model_dir / filename))
+        wandb.log_artifact(artifact)
+        print(f"Logged {name} to W&B as model artifact")
+
+    # Close W&B run
     wandb.finish()
    
 if __name__ == "__main__":
