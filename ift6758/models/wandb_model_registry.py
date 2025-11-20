@@ -36,7 +36,7 @@ run = wandb.init(entity=ENTITY, project=PROJECT, name="register-logreg-distance-
 artifact = run.use_artifact(f"{ENTITY}/{PROJECT}/logreg-distance-angle:v0", type="model")
 artifact.aliases.append("best")
 artifact.save()
-print("Registered Logistic Regression (Distance + Angle) model to Model Registry")
+print("✅ Registered Logistic Regression (Distance + Angle) model to Model Registry")
 
 run.finish()
 

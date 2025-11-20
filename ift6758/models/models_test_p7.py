@@ -208,7 +208,7 @@ def main():
         )
     }
 
-    # === create results dict ===
+    # === FIX: create results dict ===
     results = {}
 
     y_scores_reg = {}
@@ -234,7 +234,7 @@ def main():
             results[model_name + " (Playoff)"] = metrics_po
 
         except Exception as e:
-            print(f"Error evaluating {model_name}: {e}")
+            print(f"⚠️ Error evaluating {model_name}: {e}")
 
     # =====================================================
     # Generate and log figures
