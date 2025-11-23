@@ -53,18 +53,6 @@ curl -s -X POST "%BASE_URL%/download_registry_model" ^
 echo.
 echo.
 pause
-
-echo ==========================================
-echo Test 4/5: POST /predict (sans modele charge)
-echo ==========================================
-REM Note: Ce test peut echouer si un modele est deja charge
-curl -s -X POST "%BASE_URL%/predict" ^
-  -H "Content-Type: application/json" ^
-  -d "{\"distance_net\": 10.5}"
-echo.
-echo.
-pause
-
 echo ==========================================
 echo Test 5/5: Flux complet - Download puis Predict
 echo ==========================================
