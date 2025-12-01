@@ -98,6 +98,10 @@ class LNHDataScrapper:
             if response.status_code == 200:
                 data = response.json()
                 self._cache[game_id] = data
+
+                # Treat empty JSON `{}` as invalid
+                if not data:
+                    return None
                 
                 if save:
                     filename = self.dest_folder / f"{game_id}.json"
@@ -113,8 +117,6 @@ class LNHDataScrapper:
                 return None
                 
         except requests.exceptions.Timeout:
-            return None
-        except requests.exceptions.RequestException as e:
             return None
         except requests.exceptions.RequestException as e:
             return None
