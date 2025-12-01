@@ -25,7 +25,7 @@ class ServingClient:
 
 
     # -----------------------------------------------------------
-    # 1. /predict  (FULLY REWRITTEN TO MATCH YOUR app.py)
+    # 1. /predict
     # -----------------------------------------------------------
     def predict(self, X: pd.DataFrame, model_key: str = None) -> pd.DataFrame:
         """
@@ -80,7 +80,7 @@ class ServingClient:
 
 
     # -----------------------------------------------------------
-    # 2. /logs  (UNCHANGED — already compatible)
+    # 2. /logs  
     # -----------------------------------------------------------
     def logs(self) -> dict:
         """
@@ -109,7 +109,7 @@ class ServingClient:
 
 
     # -----------------------------------------------------------
-    # 3. /download_registry_model  (UNCHANGED — FULLY COMPATIBLE)
+    # 3. /download_registry_model  
     # -----------------------------------------------------------
     def download_registry_model(self, workspace: str, model: str, version: str) -> dict:
         """
