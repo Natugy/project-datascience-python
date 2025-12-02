@@ -48,9 +48,10 @@ WORKDIR /code
 
 # Copy the requirements file and install dependencies
 COPY ./docker_requirements.txt .
-COPY ift6758 .
+COPY ./setup.py .
+COPY ./ift6758 ./ift6758
 RUN pip install -r docker_requirements.txt
-RUN pip install -e ift6758/
+RUN pip install -e .
 
 # Copy the rest of the application code
 COPY ./ift6758/backend .
@@ -60,8 +61,6 @@ EXPOSE 5000
 
 # Command to run the Flask application
 CMD ["python", "app.py"]
-
-# TODO: install libs
 
 
 # TODO: expose ports (or do this in docker-compose)
