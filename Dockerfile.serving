@@ -1,10 +1,3 @@
-# To build a container, you will use the docker build command
-# https://docs.docker.com/engine/reference/commandline/build/
-#
-#   docker build -t <IMAGE TAG> -f Dockerfile.serving .
-#   docker build -t <IMAGE TAG> -f Dockerfile.jupyter .
-#
-
 
 # https://docs.docker.com/engine/reference/builder/#from
 # You shouldn't need to change this
@@ -14,42 +7,10 @@ FROM python:3.9
 # Create and cd into /code as your working directory
 WORKDIR /code
 
-
-# The main docker commands you will find useful:
-# 
-# Add a file or directory
-# https://docs.docker.com/engine/reference/builder/#add
-#
-#       ADD ./<SOURCE_DIR/FILE> ./<DOCKER_DIR/FILE>
-#
-# Run a shell command (tip: chain shell commands with && rather than multiple RUN commands)
-# https://docs.docker.com/engine/reference/builder/#run
-#
-#       RUN <SHELL COMMAND>   
-#
-# Set an environment variable:
-# https://docs.docker.com/engine/reference/builder/#env
-#
-#       ENV <ENV_VAR>=<DEFAULT>
-#
-# Expose a port
-# https://docs.docker.com/engine/reference/builder/#port
-#
-#       EXPOSE <PORT>
-#
-# Provide default command for executing container
-# https://docs.docker.com/engine/reference/builder/#cmd
-#
-#       CMD <SHELL COMMAND>
-
-
-
-# TODO: add code, optionally a default model if you want 
-
-# Copy the requirements file and install dependencies
 COPY ./docker_requirements.txt .
-COPY ./ift6758 /code/ift6758
 RUN pip install -r docker_requirements.txt
+
+COPY ./ift6758 /code/ift6758
 RUN pip install -e /code/ift6758
 
 
@@ -63,8 +24,3 @@ EXPOSE 5000
 CMD ["python", "app.py"]
 
 
-# TODO: expose ports (or do this in docker-compose)
-
-
-# TODO: specify default command - this is not required because you can always specify the command
-# either with the docker run command or in the docker-compose file
