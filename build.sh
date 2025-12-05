@@ -1,0 +1,1 @@
+docker build -t project-flask -f Dockerfile.serving .
