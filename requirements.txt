@@ -17,3 +17,5 @@ wandb
 scikit-learn
 joblib
 shap
+waitress
+flask
