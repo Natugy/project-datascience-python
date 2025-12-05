@@ -1,0 +1,16 @@
+numpy
+pandas
+matplotlib
+seaborn
+requests
+opencv-python
+tqdm
+lxml
+plotly
+setuptools
+streamlit
+wandb
+scikit-learn
+joblib
+shap
+flask

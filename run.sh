@@ -1,0 +1,1 @@
+docker run -e WANDB_API_KEY=${WANDB_API_KEY} -p 5000:5000 project-flask
