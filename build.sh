@@ -1,1 +1,1 @@
-docker build -t project-flask -f Dockerfile.serving .
+docker build -t ift6758/serving -f Dockerfile.serving .

@@ -45,25 +45,19 @@ WORKDIR /code
 
 
 # TODO: add code, optionally a default model if you want 
-
-# Copy the requirements file and install dependencies
 COPY ./docker_requirements.txt .
-COPY ./ift6758 /code/ift6758
 RUN pip install -r docker_requirements.txt
+COPY ./ift6758 /code/ift6758
 RUN pip install -e /code/ift6758
 
-
 # Copy the rest of the application code
-COPY ./ift6758/backend .
+COPY ./ift6758/milestone_3 .
 
 # Expose the port your Flask app runs on
-EXPOSE 5000
+EXPOSE 8501
 
 # Command to run the Flask application
-CMD ["python", "app.py"]
-
-
-# TODO: expose ports (or do this in docker-compose)
+CMD ["streamlit", "run", "streamlit/streamlit_app.py", "--server.address=0.0.0.0"]
 
 
 # TODO: specify default command - this is not required because you can always specify the command

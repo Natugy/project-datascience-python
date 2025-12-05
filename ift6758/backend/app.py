@@ -426,16 +426,16 @@ def predict():
 # ===============================================================================
 if __name__ == "__main__":
     # Configuration du logging pour voir les erreurs
+    print("="*60)
+    print("Starting Flask server...")
+    print("URL: http://0.0.0.0:5000")
+    print("="*60)
     import logging
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
     
-    print("="*60)
-    print("Starting Flask server...")
-    print("URL: http://0.0.0.0:5000")
-    print("="*60)
     
     # Démarrer le serveur sans reloader pour éviter les problèmes
     # Note: Utiliser 0.0.0.0 au lieu de 127.0.0.1 pour éviter les problèmes de binding
