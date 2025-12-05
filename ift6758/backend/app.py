@@ -419,3 +419,6 @@ def predict():
     except Exception as e:
         app.logger.error(f"Prediction error for model {model_key}: {e}")
         return jsonify({"error": f"Prediction failed: {str(e)}"}), 500
+    
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=os.environ.get("PORT", 5000))
