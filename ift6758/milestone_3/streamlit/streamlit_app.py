@@ -7,6 +7,7 @@ import streamlit as st
 import pandas as pd
 import requests
 import sys
+import os
 import json
 from pathlib import Path
 
@@ -16,6 +17,8 @@ sys.path.insert(0, str(project_root))
 
 from serving_client import ServingClient
 from game_client import GameClient
+
+BACKEND = os.getenv("BACKEND_URL", "127.0.0.1")
 
 # ============================================================================
 # CONFIGURATION DE LA PAGE
@@ -43,6 +46,7 @@ DEFAULT_SESSION_STATE = {
     "auto_connected": False
 }
 
+
 # Initialiser toutes les valeurs de session si elles n'existent pas
 for key, default_value in DEFAULT_SESSION_STATE.items():
     if key not in st.session_state:
@@ -53,7 +57,7 @@ for key, default_value in DEFAULT_SESSION_STATE.items():
 # ============================================================================
 if not st.session_state.auto_connected:
     try:
-        st.session_state.serving_client = ServingClient(ip="127.0.0.1", port=5000)
+        st.session_state.serving_client = ServingClient(ip=BACKEND, port=5000)
         st.session_state.game_client = GameClient(serving_client=st.session_state.serving_client)
         st.session_state.auto_connected = True
     except Exception as e:
