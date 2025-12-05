@@ -12,7 +12,7 @@ import numpy as np
 import sys 
 
 import ift6758
-import wandb
+# wandb importé de manière lazy pour éviter les conflits pydantic au démarrage
 
 # ===============================================================================
 # CONFIGURATION GLOBALE
@@ -90,14 +90,10 @@ logging.basicConfig(
 )
 app.logger.info("Application starting up...")
 
-# Initialisation Wandb
+# Initialisation Wandb (lazy import pour éviter les conflits pydantic)
 wandb_api_key = os.environ.get("WANDB_API_KEY")
 if wandb_api_key:
-    try:
-        wandb.login(key=wandb_api_key, relogin=True, verify=False) 
-        app.logger.info("Wandb initialized successfully.")
-    except Exception as e:
-        app.logger.error(f"Failed to login to Wandb: {e}")
+    app.logger.info("WANDB_API_KEY found. Wandb will be initialized on first use.")
 else:
     app.logger.warning("WANDB_API_KEY not found. Wandb registry operations may fail.")       
 
@@ -112,6 +108,18 @@ def download_model_from_wandb(model_key, version):
         tuple: (model_dir, model_file_path, model_info)
     """
     try:
+        # Import lazy de wandb pour éviter les problèmes au démarrage
+        import wandb
+        
+        # Initialiser wandb si ce n'est pas déjà fait
+        wandb_api_key = os.environ.get("WANDB_API_KEY")
+        if wandb_api_key:
+            try:
+                wandb.login(key=wandb_api_key, relogin=True, verify=False)
+                app.logger.info("Wandb initialized successfully.")
+            except Exception as e:
+                app.logger.error(f"Failed to login to Wandb: {e}")
+                raise
                       
         if model_key not in VALID_MODELS:
            raise ValueError(f"Modèle '{model_key}' non supporté.")
@@ -225,9 +233,8 @@ def download_registry_model():
         return jsonify({"error": f"Modèle '{model_key}' non supporté"}), 400
     
     requested_version_key = f"{model_key}:{version}"
-    #=======================================================================
+
     # 2. Vérifier si la version demandée est déjà en cache mémoire
-    #=======================================================================
     if model_key in MODEL_CACHE and MODEL_CACHE[model_key]["version"] == version:
         app.logger.info(f"Model {requested_version_key} already in cache. No action needed.")
         return jsonify({
@@ -240,9 +247,8 @@ def download_registry_model():
                 "workspace": MODEL_CACHE[model_key]["workspace"]                
             }
         })
-    #-----------------------------------------------------------------------------------
+
     # 3. Vérifier si le modèle existe en disque local (disque) dans la nouvelle structure
-    #-----------------------------------------------------------------------------------
     model_info = MODELS_INFO[model_key]
     filename = model_info["filename"]
     
@@ -279,9 +285,7 @@ def download_registry_model():
         except Exception as e:
             app.logger.warning(f"Failed to load from local disque: {e}, will download from Wandb") 
     
-    #-----------------------------------------------------------------------
     # 4. Sinon Télécharger le modèle depuis Wandb
-    #-----------------------------------------------------------------------
     try:
         # model_info contient les infos mises à jour (y compris la version demandée)
         model_dir, model_file_path, new_model_info = download_model_from_wandb(model_key, version=version)
@@ -292,9 +296,8 @@ def download_registry_model():
         
         # Logique de résilience : On ne brise pas l'application. On garde le cache existant.
         return jsonify({"status": "download_failed", "error": error_msg}), 500
-    #-----------------------------------------------------------------------
+
     # 5. Tenter de Charger le nouveau modèle (Mise à jour du cache sécurisée)
-    #-----------------------------------------------------------------------
     try:
         # Charger le modèle dans une variable locale temporaire
         new_model_object = load_model_local(model_file_path)
@@ -316,9 +319,8 @@ def download_registry_model():
         app.logger.error(error_msg)       
         # Logique de résilience : Le cache n'est pas mis à jour avec la version corrompue.
         return jsonify({"status": "load_failed", "error": error_msg}), 500
-    #-----------------------------------------------------------------------
+    
     # 6. Retourner la réponse de succès
-    #-----------------------------------------------------------------------
     response = {
         "status": "success",
         "message": "Model downloaded and loaded into cache successfully",
@@ -363,36 +365,34 @@ def predict():
     # 4. Mapper et filtrer les features selon le modèle utilisé
     mapped_data = {}
     
-    if model_key == "logreg-distance":
-        # Modèle distance uniquement : seulement distance_net
-        if "distance" in predict_data:
-            mapped_data["distance_net"] = predict_data["distance"]
-        elif "distance_net" in predict_data:
-            mapped_data["distance_net"] = predict_data["distance_net"]
-        else:
-            return jsonify({
-                "error": f"Model '{model_key}' requires 'distance' or 'distance_net' feature"
-            }), 400
+    # Définir les features requises par modèle
+    model_features = {
+        "logreg-distance": ["distance_net"],
+        "logreg-distance-angle": ["distance_net", "angle_net"]
+    }
+    
+    required_features = model_features.get(model_key, [])
+    
+    if required_features:
+        # Mapping des noms alternatifs
+        feature_aliases = {
+            "distance_net": ["distance", "distance_net"],
+            "angle_net": ["angle", "angle_net"]
+        }
         
-    elif model_key == "logreg-distance-angle":
-        # Modèle distance + angle : les deux features requises
-        if "distance" in predict_data:
-            mapped_data["distance_net"] = predict_data["distance"]
-        elif "distance_net" in predict_data:
-            mapped_data["distance_net"] = predict_data["distance_net"]
-        else:
-            return jsonify({
-                "error": f"Model '{model_key}' requires 'distance' or 'distance_net' feature"
-            }), 400
-        
-        if "angle" in predict_data:
-            mapped_data["angle_net"] = predict_data["angle"]
-        elif "angle_net" in predict_data:
-            mapped_data["angle_net"] = predict_data["angle_net"]
-        else:
-            return jsonify({
-                "error": f"Model '{model_key}' requires 'angle' or 'angle_net' feature"
-            }), 400
+        for feature in required_features:
+            found = False
+            for alias in feature_aliases.get(feature, [feature]):
+                if alias in predict_data:
+                    mapped_data[feature] = predict_data[alias]
+                    found = True
+                    break
+            
+            if not found:
+                app.logger.error(f"Missing feature '{feature}' for model '{model_key}'")
+                return jsonify({
+                    "error": f"Model '{model_key}' requires '{feature}' feature (or aliases: {feature_aliases.get(feature, [feature])})"
+                }), 400
     else:
         # Pour les autres modèles, utiliser les données telles quelles
         mapped_data = predict_data
@@ -419,3 +419,31 @@ def predict():
     except Exception as e:
         app.logger.error(f"Prediction error for model {model_key}: {e}")
         return jsonify({"error": f"Prediction failed: {str(e)}"}), 500
+
+
+# ===============================================================================
+# DÉMARRAGE DU SERVEUR
+# ===============================================================================
+if __name__ == "__main__":
+    # Configuration du logging pour voir les erreurs
+    import logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    
+    print("="*60)
+    print("Starting Flask server...")
+    print("URL: http://0.0.0.0:5000")
+    print("="*60)
+    
+    # Démarrer le serveur sans reloader pour éviter les problèmes
+    # Note: Utiliser 0.0.0.0 au lieu de 127.0.0.1 pour éviter les problèmes de binding
+    try:
+        from werkzeug.serving import run_simple
+        run_simple('0.0.0.0', 5000, app, use_reloader=False, use_debugger=False, threaded=True)
+    except Exception as e:
+        print(f"ERROR: Failed to start server: {e}")
+        import traceback
+        traceback.print_exc()
+        raise

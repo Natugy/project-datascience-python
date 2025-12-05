@@ -17,6 +17,11 @@ from serving_client import ServingClient
 
 logger = logging.getLogger(__name__)
 
+# Constantes pour les coordonnées des filets
+GOAL_X_POSITIVE = 89  # Coordonnée X du filet côté positif
+GOAL_X_NEGATIVE = -89  # Coordonnée X du filet côté négatif
+GOAL_Y = 0  # Coordonnée Y du centre du filet
+
 
 class GameClient:
     """
@@ -150,22 +155,22 @@ class GameClient:
         # Compute empty-net label
         df = detect_empty_net_from_situation(df)
 
-        # Compute distance + angle
-        goal_x = np.where(df["xCoord"] > 0, 89, -89)
-        goal_y = 0
-
+        # Compute distance + angle using constants
+        goal_x = np.where(df["xCoord"] > 0, GOAL_X_POSITIVE, GOAL_X_NEGATIVE)
+        
         df["distance_net"] = np.sqrt(
             (goal_x - df["xCoord"]) ** 2 + 
-            (goal_y - df["yCoord"]) ** 2)
+            (GOAL_Y - df["yCoord"]) ** 2
+        )
         
-        df["angle_net"] = abs(
+        df["angle_net"] = np.abs(
             np.degrees(np.arctan2(df["yCoord"], (goal_x - df["xCoord"])))
         )
 
         df["is_goal"] = (df["typeDescKey"] == "goal").astype(int)
 
-        # Keep same columns as training features
-        return df[["distance_net", "angle_net", "empty_net"]]
+        # Keep same columns as training features, plus teamId for tracking
+        return df[["distance_net", "angle_net", "empty_net", "teamId", "period", "timeInPeriod"]]
 
     # ----------------------------------------------------------
     # Main entrypoint used by Streamlit

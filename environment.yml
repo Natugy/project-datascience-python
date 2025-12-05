@@ -24,3 +24,5 @@ dependencies:
   - pip:
     - wandb
     - streamlit
+    - waitress
+    - flask
