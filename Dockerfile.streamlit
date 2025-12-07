@@ -12,6 +12,9 @@ RUN pip install -e /code/ift6758
 # Copy the rest of the application code
 COPY ./ift6758/milestone_3 .
 
+# Copy data files for game IDs
+COPY ./data /code/data
+
 # Expose the port your Streamlit app runs on
 EXPOSE 8501
 
